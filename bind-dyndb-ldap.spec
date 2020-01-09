@@ -2,7 +2,7 @@
 
 Name:           bind-dyndb-ldap
 Version:        11.1
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
@@ -21,13 +21,13 @@ Patch7:         bind-dyndb-ldap-tkrizek-0006-Coverity-fix-REVERSE_INULL-for-peve
 
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-BuildRequires:  bind-devel >= 32:9.9.4-44, bind-lite-devel >= 32:9.9.4-44
+BuildRequires:  bind-devel >= 32:9.9.4-51, bind-lite-devel >= 32:9.9.4-51
 BuildRequires:  krb5-devel
 BuildRequires:  openldap-devel
 BuildRequires:  libuuid-devel
 BuildRequires:  automake, autoconf, libtool
 
-Requires:       bind >= 32:9.9.4-44
+Requires:       bind >= 32:9.9.4-51
 # https://bugzilla.redhat.com/show_bug.cgi?id=1376851
 Requires(post,postun): selinux-policy
 Requires(post):  sed
@@ -136,6 +136,9 @@ rm -rf %{buildroot}
 
 
 %changelog
+* Wed Jul 12 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-4
+- Resolves: #1469984 required bind version doesn't have the dyndb interface
+
 * Wed Apr 26 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-3
 - resolves: #1436268 crash when server_id is not present in named.conf
 - coverity fixes
