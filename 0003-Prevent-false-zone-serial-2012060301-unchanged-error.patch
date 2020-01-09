@@ -1,0 +1,38 @@
+From d2349fd132b821be93980e9a42cf8e52ed9bc0f9 Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Mon, 22 Oct 2012 16:07:32 +0200
+Subject: [PATCH] Prevent false 'zone serial (2012060301) unchanged' error
+ messages.
+
+This patch prevents zone_postload() calls for all zones managed by
+bind-dyndb-ldap.
+
+https://fedorahosted.org/bind-dyndb-ldap/ticket/79
+
+Signed-off-by: Petr Spacek <pspacek@redhat.com>
+---
+ src/ldap_helper.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/ldap_helper.c b/src/ldap_helper.c
+index af90a13ccf51dc8d1ac30a46b28f1165f8dc9edf..8a6f603d1393d322561a8cbb8fe4abf188c71dd0 100644
+--- a/src/ldap_helper.c
++++ b/src/ldap_helper.c
+@@ -1297,7 +1297,13 @@ ldap_parse_zoneentry(ldap_entry_t *entry, ldap_instance_t *inst)
+ 	if (result == ISC_R_SUCCESS)
+ 		CHECK(configure_zone_ssutable(zone, HEAD(values)->value));
+ 	else
+-		CHECK(configure_zone_ssutable(zone, NULL));
++		/* We need to declare zone as 'dynamic'
++		 * for dns_zone_isdynamic() to prevent unwanted
++		 * zone_postload() calls and warnings about serial and so on.
++		 *
++		 * Created SSU table contains no rules =>
++		 * dns_ssutable_checkrules() will return deny. */
++		CHECK(configure_zone_ssutable(zone, ""));
+ 
+ 	/* Fetch allow-query and allow-transfer ACLs */
+ 	log_debug(2, "Setting allow-query for %p: %s", zone, dn);
+-- 
+1.8.3.1
+

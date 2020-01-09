@@ -1,0 +1,38 @@
+diff --unified -r bind-dyndb-ldap-2.3.deadlock/README bind-dyndb-ldap-2.3/README
+--- bind-dyndb-ldap-2.3.deadlock/README	2013-09-26 13:59:47.033989925 +0200
++++ bind-dyndb-ldap-2.3/README	2013-09-26 14:00:57.450122611 +0200
+@@ -139,7 +139,7 @@
+ 	ldap_initialize(3) function. This option is mandatory.
+ 	Example: ldap://ldap.example.com
+ 
+-connections (default 2)
++connections (minimum 4, default 4)
+ 	Number of connections the LDAP driver should try to establish to
+ 	the LDAP server. It's best if this matches the number of threads
+ 	BIND creates, for performance reasons. However, your LDAP server
+diff --unified -r bind-dyndb-ldap-2.3.deadlock/src/ldap_helper.c bind-dyndb-ldap-2.3/src/ldap_helper.c
+--- bind-dyndb-ldap-2.3.deadlock/src/ldap_helper.c	2013-09-26 13:59:45.459986937 +0200
++++ bind-dyndb-ldap-2.3/src/ldap_helper.c	2013-09-26 14:00:16.739046135 +0200
+@@ -347,7 +347,7 @@
+ 	dns_forwarders_t *orig_global_forwarders = NULL;
+ 	setting_t ldap_settings[] = {
+ 		{ "uri",	 no_default_string		},
+-		{ "connections", default_uint(2)		},
++		{ "connections", default_uint(4)		},
+ 		{ "reconnect_interval", default_uint(60)	},
+ 		{ "timeout",	 default_uint(10)		},
+ 		{ "base",	 no_default_string		},
+@@ -434,10 +434,9 @@
+ 
+ 	/* Validate and check settings. */
+ 	str_toupper(ldap_inst->sasl_mech);
+-	if (ldap_inst->connections < 1) {
+-		log_error("at least one connection is required");
+-		result = ISC_R_FAILURE;
+-		goto cleanup;
++	if (ldap_inst->connections < 4) {
++		log_error("at least 4 connections are required, increasing limit");
++		ldap_inst->connections = 4;
+ 	}
+ 	/* Select authentication method. */
+ 	ldap_inst->auth_method = AUTH_INVALID;

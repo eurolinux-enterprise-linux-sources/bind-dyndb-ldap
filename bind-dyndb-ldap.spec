@@ -6,7 +6,7 @@
 
 Name:           bind-dyndb-ldap
 Version:        2.3
-Release:        2%{?dist}.1
+Release:        5%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
@@ -24,6 +24,9 @@ Requires:       bind >= 32:9.6.1-0.3.b1
 
 Patch0: 0001-Don-t-fail-if-idnsSOAserial-attribute-is-missing-in-.patch
 Patch1: 0001-Prevent-crash-caused-by-race-condition-during-plugin.patch
+Patch2: 0002-Fix-crash-caused-by-zonesub-match-type-in-update-ACL.patch
+Patch3: 0003-Prevent-false-zone-serial-2012060301-unchanged-error.patch
+Patch4: 0004-Prevent-deadlock-in-sync-ptr.patch
 
 %description
 This package provides an LDAP back-end plug-in for BIND. It features
@@ -36,6 +39,9 @@ off of your LDAP server.
 
 %patch0 -p1 -b .rh895083
 %patch1 -p1 -b .rh923113
+%patch2 -p1 -b .rh921167
+%patch3 -p1 -b .rh908780
+%patch4 -p1 -b .rh1010396
 
 %build
 export CPPFLAGS=`isc-config.sh --cflags`
@@ -64,7 +70,14 @@ rm -rf %{buildroot}
 
 
 %changelog
-* Fri Mar 22 2013 Adam Tkac <atkac redhat com> - 2.3-2.1
+* Thu Sep 26 2013 Petr Spacek <pspacek redhat com> - 2.3-5
+- prevent deadlock in PTR record synchronization (#1010396)
+
+* Fri Jul 26 2013 Petr Spacek <pspacek redhat com> - 2.3-4
+- update-policy with match type 'zonesub' lead to crash (#921167)
+- zones without idnsUpdatePolicy attribute produced error messages (#908780)
+
+* Fri Mar 22 2013 Adam Tkac <atkac redhat com> - 2.3-3
 - processing of configuration opts too early could lead to crash (#923113)
 
 * Tue Jan 15 2013 Adam Tkac <atkac redhat com> - 2.3-2
