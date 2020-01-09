@@ -1,0 +1,53 @@
+From 26c9c50996d346e060402757351db3992e0e56ca Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Thu, 4 Jun 2015 15:53:13 +0200
+Subject: [PATCH] Fix error handling in find() to prevent crashes in
+ query_addwildcardproof().
+
+This bug causes crash in BIND 9.8.2rc1-RedHat-9.8.2-0.30.rc1.el6_6.2.
+The scenario is as follows:
+- A client tries to resolve non-existing domain name from zone that is managed
+  by bind-dyndb-ldap. The client requests DNSSEC data.
+- The code in BIND gets into the query_addwildcardproof() function to find
+  NSEC record.
+- Once BIND figures out that there is no NSEC, it tries to generate NSEC3.
+- This boils down to the call dns_db_find() in query.c:3340.
+- find() implementation from bind-dyndb-ldap plugin is called.
+- find() in ldap_driver.c calls ldapdb_rdatalist_get().
+- ldapdb_rdatalist_get() in ldap_helper.c calls ldap_query().
+- ldap_query() times out and returns ISC_R_TIMEDOUT.
+- In ldapdb_rdatalist_get(), the CHECK jumps to cleanup label and returns
+  ISC_R_TIMEDOUT.
+- find() in ldap_driver.c returns DNS_R_NXDOMAIN if the result
+  from ldapdb_rdatalist_get() is not ISC_R_SUCCESS.
+- After find() skips all labels due to timeout, the result
+  contains DNS_R_NXDOMAIN. The for cycle in find() ends and DNS_R_NXDOMAIN
+  is returned from find().
+- dns_db_find() wrapper in query.c returns DNS_R_NXDOMAIN.
+- Labels in the for loop in query_addwildcardproof() are stripped out because
+  of the DNS_R_NXDOMAIN return code.
+- Once we get to the root zone -> assert().
+---
+ src/ldap_driver.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/ldap_driver.c b/src/ldap_driver.c
+index 99a8421105f91a6c98d0e15d2c5962701974e380..17cddb483bc3231ee6a7e9ddab7b0e9c84cd95d6 100644
+--- a/src/ldap_driver.c
++++ b/src/ldap_driver.c
+@@ -510,9 +510,11 @@ find(dns_db_t *db, dns_name_t *name, dns_dbversion_t *version,
+ 					      ldapdb->ldap_inst, traversename,
+ 					      &ldapdb->common.origin,
+ 					      &rdatalist);
+-		if (result != ISC_R_SUCCESS) {
++		if (result == ISC_R_NOTFOUND) {
+ 			result = DNS_R_NXDOMAIN;
+ 			continue;
++		} else if (result != ISC_R_SUCCESS) {
++			goto cleanup;
+ 		}
+ 
+ 		/* TODO: We should check for DNAME records right here */
+-- 
+2.1.0
+

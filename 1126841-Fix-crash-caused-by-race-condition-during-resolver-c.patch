@@ -1,0 +1,63 @@
+From eeb16d24f6aef0b859da2c3de08689792a9d6407 Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Fri, 19 Dec 2014 15:34:47 +0100
+Subject: [PATCH] Fix crash caused by race condition during resolver cache
+ flushing
+
+dns_view_flushcache() call has to be always done in single-thread mode.
+Locking around the call was missing in forwarder reconfiguration and
+zone deletion which could cause BIND crash.
+---
+ src/ldap_helper.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/ldap_helper.c b/src/ldap_helper.c
+index 8febc2d7d0b985d423d7b64e7397f9c579487caf..44b31e9ee9175e2f4bffd312c498ee83e8aab149 100644
+--- a/src/ldap_helper.c
++++ b/src/ldap_helper.c
+@@ -854,6 +854,7 @@ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock,
+ {
+ 	isc_result_t result;
+ 	isc_result_t isforward = ISC_R_NOTFOUND;
++	isc_result_t lock_result;
+ 	isc_boolean_t unlock = ISC_FALSE;
+ 	isc_boolean_t freeze = ISC_FALSE;
+ 	dns_zone_t *zone = NULL;
+@@ -886,7 +887,13 @@ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock,
+ 		if (isforward == ISC_R_SUCCESS)
+ 			log_debug(1, "forward zone '%s': unloaded", zone_name_char);
+ 		log_debug(1, "zone '%s' not found in zone register", zone_name_char);
++		lock_result = isc_task_beginexclusive(inst->task);
++		/* dns_view_flushcache() has to be always locked no matter what */
++		RUNTIME_CHECK(lock_result == ISC_R_SUCCESS ||
++			      lock_result == ISC_R_LOCKBUSY);
+ 		result = dns_view_flushcache(inst->view);
++		if (lock_result == ISC_R_SUCCESS)
++			isc_task_endexclusive(inst->task);
+ 		goto cleanup;
+ 	} else if (result != ISC_R_SUCCESS)
+ 		goto cleanup;
+@@ -988,6 +995,7 @@ configure_zone_forwarders(ldap_entry_t *entry, ldap_instance_t *inst,
+ 	const char *dn = entry->dn;
+ 	isc_result_t result;
+ 	isc_result_t orig_result;
++	isc_result_t lock_result;
+ 	ldap_valuelist_t values;
+ 	ldap_value_t *value;
+ 	isc_sockaddrlist_t addrs;
+@@ -1165,7 +1173,12 @@ cleanup:
+ 		log_debug(5, "%s '%s': forwarder table was updated: %s",
+ 			  msg_obj_type, dn, dns_result_totext(result));
+ 		orig_result = result;
++		lock_result = isc_task_beginexclusive(inst->task);
++		RUNTIME_CHECK(lock_result == ISC_R_SUCCESS ||
++			      lock_result == ISC_R_LOCKBUSY);
+ 		result = dns_view_flushcache(inst->view);
++		if (lock_result == ISC_R_SUCCESS)
++			isc_task_endexclusive(inst->task);
+ 		if (result == ISC_R_SUCCESS)
+ 			result = orig_result;
+ 	}
+-- 
+2.1.0
+

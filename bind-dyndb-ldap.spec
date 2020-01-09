@@ -6,7 +6,7 @@
 
 Name:           bind-dyndb-ldap
 Version:        2.3
-Release:        6%{?dist}
+Release:        8%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
@@ -33,6 +33,10 @@ Patch5: 1175318-0001-Add-helper-functions-for-generic-iteration-over-RBT.patch
 Patch6: 1175318-0002-Add-missing-includes-to-util.h.patch
 Patch7: 1175318-0003-Add-support-for-pure-forward-zones-idnsForwardZone-o.patch
 Patch8: 1175318-0004-Make-RBT-iterators-more-resilient.patch
+Patch9: 1126841-Fix-crash-caused-by-race-condition-during-resolver-c.patch
+Patch10: 1142176-Fix-ticket-expiration-check.patch
+Patch11: 1183805-Documentation-idnsAllowTransfer-idnsAllowQuery.patch
+Patch12: 1219568-dnssec-addwildcardproof-crash.patch
 
 %description
 This package provides an LDAP back-end plug-in for BIND. It features
@@ -52,6 +56,10 @@ off of your LDAP server.
 %patch6 -p1 -b .rh1175318-2
 %patch7 -p1 -b .rh1175318-3
 %patch8 -p1 -b .rh1175318-4
+%patch9 -p1 -b .rh1126841
+%patch10 -p1 -b .rh1142176
+%patch11 -p1 -b .rh1183805
+%patch12 -p1 -b .rh1219568
 
 %build
 export CPPFLAGS=`isc-config.sh --cflags`
@@ -80,6 +88,14 @@ rm -rf %{buildroot}
 
 
 %changelog
+* Thu Jun 04 2015 Petr Spacek <pspacek@redhat.com> - 2.3-8
+- fix crash during DNSSEC wildcard proof generation (#1219568)
+
+* Thu Feb 19 2015 Petr Spacek <pspacek@redhat.com> - 2.3-7
+- fix crash caused by race condition during resolver cache flushing (#1126841)
+- fix ticket expiration check (#1142176)
+- fix idnsAllowTransfer and idnsAllowQuery attributes documentation (#1183805)
+
 * Fri Dec 19 2014 Petr Spacek <pspacek redhat com> - 2.3-6
 - support forward zones introduced in bind-dyndb-ldap 3.x (#1175318)
 

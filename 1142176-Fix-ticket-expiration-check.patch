@@ -1,0 +1,12 @@
+diff -r -U3 a/src/krb5_helper.c b/src/krb5_helper.c
+--- a/src/krb5_helper.c	2012-04-23 11:38:10.000000000 +0200
++++ b/src/krb5_helper.c	2015-01-13 14:01:59.991244272 +0100
+@@ -78,7 +78,7 @@
+ 	krberr = krb5_timeofday(context, &now);
+ 	CHECK_KRB5(context, krberr, "Failed to get timeofday");
+ 
+-	if (now > (creds.times.endtime + MIN_TIME)) {
++	if (now > (creds.times.endtime - MIN_TIME)) {
+ 		log_debug(2, "Credentials expired");
+ 		result = ISC_R_FAILURE;
+ 		goto cleanup;
