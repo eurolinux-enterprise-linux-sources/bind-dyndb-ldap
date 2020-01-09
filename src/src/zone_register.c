@@ -70,7 +70,6 @@ static void delete_zone_info(void *arg1, void *arg2);
  */
 static const setting_t zone_settings[] = {
 	{ "active",			default_boolean(0)	},
-	{ "default_ttl",		no_default_uint		},
 	{ "dyn_update",			no_default_boolean	},
 	{ "update_policy",		no_default_string	},
 	{ "allow_query",		no_default_string	},
@@ -163,7 +162,7 @@ zr_destroy(zone_register_t **zrp)
 		if (result == ISC_R_SUCCESS) {
 			rbt_iter_stop(&iter);
 			result = ldap_delete_zone2(zr->ldap_inst,
-						   &name, ISC_FALSE);
+						   &name, ISC_FALSE, ISC_FALSE);
 			RUNTIME_CHECK(result == ISC_R_SUCCESS);
 		}
 	} while (result == ISC_R_SUCCESS);
@@ -260,15 +259,15 @@ cleanup:
 static isc_result_t ATTR_NONNULL(1,2,4,5,6,8)
 create_zone_info(isc_mem_t * const mctx, dns_zone_t * const raw,
 		dns_zone_t * const secure, const char * const dn,
-		 settings_set_t *global_settings, ldap_instance_t *inst,
+		 settings_set_t *global_settings, const char *db_name,
 		 dns_db_t * const ldapdb, zone_info_t **zinfop)
 {
 	isc_result_t result;
 	zone_info_t *zinfo;
 	char settings_name[PRINT_BUFF_SIZE];
 	ld_string_t *zone_dir = NULL;
+	char *argv[1];
 
-	REQUIRE(inst != NULL);
 	REQUIRE(raw != NULL);
 	REQUIRE(dn != NULL);
 	REQUIRE(zinfop != NULL && *zinfop == NULL);
@@ -294,9 +293,11 @@ create_zone_info(isc_mem_t * const mctx, dns_zone_t * const raw,
 	CHECK(fs_dirs_create(str_buf(zone_dir)));
 
 	if (ldapdb == NULL) { /* create new empty database */
+		DE_CONST(db_name, argv[0]);
 		CHECK(ldapdb_create(mctx, dns_zone_getorigin(raw),
 				    LDAP_DB_TYPE, LDAP_DB_RDATACLASS,
-				    inst, &zinfo->ldapdb));
+				    sizeof(argv)/sizeof(argv[0]),
+				    argv, NULL, &zinfo->ldapdb));
 	} else { /* re-use existing database */
 		dns_db_attach(ldapdb, &zinfo->ldapdb);
 	}
@@ -394,7 +395,8 @@ zr_add_zone(zone_register_t * const zr, dns_db_t * const ldapdb,
 	}
 
 	CHECK(create_zone_info(zr->mctx, raw, secure, dn, zr->global_settings,
-			       zr->ldap_inst, ldapdb, &new_zinfo));
+			       ldap_instance_getdbname(zr->ldap_inst), ldapdb,
+			       &new_zinfo));
 	CHECK(dns_rbt_addname(zr->rbt, name, new_zinfo));
 
 cleanup:
@@ -557,68 +559,5 @@ zr_get_zone_settings(zone_register_t *zr, dns_name_t *name, settings_set_t **set
 
 	RWUNLOCK(&zr->rwlock, isc_rwlocktype_read);
 
-	return result;
-}
-
-/**
- * Delete a zone from plain BIND. LDAP zones require further steps for complete
- * removal, like deletion from zone register etc.
- *
- * @pre A zone pointer has to be attached to *zonep.
- *
- * @returns Values returned by dns_zt_unmount().
- */
-isc_result_t ATTR_NONNULLS ATTR_CHECKRESULT
-delete_bind_zone(dns_zt_t *zt, dns_zone_t **zonep) {
-	dns_zone_t *zone;
-	dns_db_t *dbp = NULL;
-	dns_zonemgr_t *zmgr;
-	isc_result_t result;
-
-	REQUIRE (zonep != NULL && *zonep != NULL);
-
-	zone = *zonep;
-
-	/* Do not unload partially loaded zones, they have uninitialized
-	 * structures. */
-	if (dns_zone_getdb(zone, &dbp) == ISC_R_SUCCESS) {
-		dns_db_detach(&dbp); /* dns_zone_getdb() attaches DB implicitly */
-		dns_zone_unload(zone);
-		dns_zone_log(zone, ISC_LOG_INFO, "shutting down");
-	} else {
-		dns_zone_log(zone, ISC_LOG_DEBUG(1), "not loaded - unload skipped");
-	}
-
-	result = dns_zt_unmount(zt, zone);
-	if (result == ISC_R_NOTFOUND) /* zone wasn't part of a view */
-		result = ISC_R_SUCCESS;
-	zmgr = dns_zone_getmgr(zone);
-	if (zmgr != NULL)
-		dns_zonemgr_releasezone(zmgr, zone);
-	dns_zone_detach(zonep);
-
-	return result;
-}
-
-/* Test if the existing zone is 'empty zone' per RFC 6303. */
-isc_boolean_t ATTR_NONNULLS ATTR_CHECKRESULT
-zone_isempty(dns_zone_t *zone) {
-	char **argv = NULL;
-	isc_mem_t *mctx = NULL;
-	isc_boolean_t result = ISC_FALSE;
-
-	mctx = dns_zone_getmctx(zone);
-	if (dns_zone_getdbtype(zone, &argv, mctx) != ISC_R_SUCCESS)
-		CLEANUP_WITH(ISC_FALSE);
-
-	if (argv[0] != NULL && strcmp("_builtin", argv[0]) == 0 &&
-	    argv[1] != NULL && strcmp("empty", argv[1]) == 0) {
-		result = ISC_TRUE;
-	} else {
-		result = ISC_FALSE;
-	}
-	isc_mem_free(mctx, argv);
-
-cleanup:
 	return result;
 }

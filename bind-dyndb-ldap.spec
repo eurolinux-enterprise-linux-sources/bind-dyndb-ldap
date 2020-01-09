@@ -1,37 +1,25 @@
 %define VERSION %{version}
 
-%define bind_version 32:9.11.1-1.P1
-
 Name:           bind-dyndb-ldap
-Version:        11.1
-Release:        6%{?dist}
+Version:        8.0
+Release:        1%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
 License:        GPLv2+
-URL:            https://releases.pagure.org/bind-dyndb-ldap
-Source0:        https://releases.pagure.org/%{name}/%{name}-%{VERSION}.tar.bz2
-Source1:        https://releases.pagure.org/%{name}/%{name}-%{VERSION}.tar.bz2.asc
-Patch4:         bind-dyndb-ldap-pemensik-0002-Treat-passwords-like-ordinary-text-bind-does-not-sup.patch
-Patch5:         bind-dyndb-ldap-pemensik-0003-Replace-unsupported-autoreallocating-buffer-by-custo.patch
-Patch6:         bind-dyndb-ldap-tkrizek-0005-Setting-skip-unconfigured-values.patch
-Patch7:         bind-dyndb-ldap-tkrizek-0006-Coverity-fix-REVERSE_INULL-for-pevent-inst.patch
-Patch8:         bind-dyndb-ldap-pemensik-0007-Add-empty-callback-for-getsize.patch
-Patch9:         bind-dyndb-ldap-pemensik-0008-Support-for-BIND-9.11.3.patch
-Patch10:        bind-dyndb-ldap-pemensik-0009-Support-for-BIND-9.11.5.patch
-Patch11:        bind-dyndb-ldap-pemensik-0010-Use-correct-dn-value.patch
+URL:            https://fedorahosted.org/bind-dyndb-ldap
+Source0:        https://fedorahosted.org/released/%{name}/%{name}-%{VERSION}.tar.bz2
+Patch0:         gcc-node_generation-uninit-warn.patch
 
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-BuildRequires:  bind-devel >= %{bind_version}, bind-lite-devel >= %{bind_version}, bind-pkcs11-devel >= %{bind_version}
+BuildRequires:  bind-devel >= 32:9.9.0-1, bind-lite-devel >= 32:9.9.0-1
 BuildRequires:  krb5-devel
 BuildRequires:  openldap-devel
-BuildRequires:  openssl-devel
 BuildRequires:  libuuid-devel
 BuildRequires:  automake, autoconf, libtool
 
-Requires:       bind-pkcs11 >= %{bind_version}, bind-pkcs11-utils >= %{bind_version}
-Requires(post):  sed
+Requires:       bind >= 32:9.9.0-1
 
 %description
 This package provides an LDAP back-end plug-in for BIND. It features
@@ -40,11 +28,13 @@ off of your LDAP server.
 
 
 %prep
-%autosetup -p1
+%setup -q -n %{name}-%{VERSION}
+%patch0 -p1 -b .gcc-node_generation-uninit-warn
 
 %build
+export CFLAGS="`isc-config.sh --cflags dns` $RPM_OPT_FLAGS"
 autoreconf -fiv
-%configure --disable-werror
+%configure
 make %{?_smp_mflags}
 
 
@@ -58,45 +48,24 @@ rm %{buildroot}%{_libdir}/bind/ldap.la
 rm -r %{buildroot}%{_datadir}/doc/%{name}
 
 
+# SELinux boolean named_write_master_zones has to be enabled
+# otherwise the plugin will not be able to write to /var/named.
+# This scriptlet enables the boolean after installation or upgrade.
+# SELinux is sensitive area so I want to inform user about the change.
 %post
-# Transform named.conf if it still has old-style API.
-PLATFORM=$(uname -m) 
-
-if [ $PLATFORM == "x86_64" ] ; then
-    LIBPATH=/usr/lib64
-else
-    LIBPATH=/usr/lib
+if [ -x "/usr/sbin/setsebool" ] ; then
+        echo "Enabling SELinux boolean named_write_master_zones"
+        /usr/sbin/setsebool -P named_write_master_zones=1 || :
 fi
 
-# The following sed script:
-#   - scopes the named.conf changes to dynamic-db
-#   - replaces arg "name value" syntax with name "value"
-#   - changes dynamic-db header to dyndb
-#   - uses the new way the define path to the library
-#   - removes no longer supported arguments (library, cache_ttl,
-#       psearch, serial_autoincrement, zone_refresh)
-while read -r PATTERN
-do
-    SEDSCRIPT+="$PATTERN"
-done <<EOF
-/^\s*dynamic-db/,/};/ {
 
-  s/\(\s*\)arg\s\+\(["']\)\([a-zA-Z_]\+\s\)/\1\3\2/g;
+# This scriptlet disables the boolean after uninstallation.
+%postun
+if [ "0$1" -eq "0" ] && [ -x "/usr/sbin/setsebool" ] ; then
+        echo "Disabling SELinux boolean named_write_master_zones"
+        /usr/sbin/setsebool -P named_write_master_zones=0 || :
+fi
 
-  s/^dynamic-db/dyndb/;
-
-  s@\(dyndb "[^"]\+"\)@\1 "$LIBPATH/bind/ldap.so"@;
-  s@\(dyndb '[^']\+'\)@\1 '$LIBPATH/bind/ldap.so'@;
-
-  /\s*library[^;]\+;/d;
-  /\s*cache_ttl[^;]\+;/d;
-  /\s*psearch[^;]\+;/d;
-  /\s*serial_autoincrement[^;]\+;/d;
-  /\s*zone_refresh[^;]\+;/d;
-}
-EOF
-
-sed -i.bak -e "$SEDSCRIPT" /etc/named.conf
 
 %clean
 rm -rf %{buildroot}
@@ -104,58 +73,12 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
-%doc NEWS README.md COPYING doc/{example,schema}.ldif
+%doc NEWS README COPYING doc/{example,schema}.ldif
 %dir %attr(770, root, named) %{_localstatedir}/named/dyndb-ldap
 %{_libdir}/bind/ldap.so
 
 
 %changelog
-* Tue Feb 12 2019 Petr Menšík <pemensik@redhat.com> - 11.1-6
-- Bump BIND version and fix library dependecies
-- Rebuild for bind 9.11.3. Minor tweaks to compile.
-- Support for bind 9.11.5 headers
-
-* Mon May 28 2018 Petr Menšík <pemensik@redhat.com> - 11.1-5
-- Resolves: #1580389 depend on bind with writeable home
-
-* Wed Jul 12 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-4
-- Resolves: #1469563 required bind version doesn't have the dyndb interface
-
-* Wed Apr 26 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-3
-- resolves: #1436268 crash when server_id is not present in named.conf
-- coverity fixes
-
-* Wed Mar 15 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-2
-- bump NVR to fix bind dependencies
-
-* Wed Mar 15 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-1
-- update to letest upstream version
-- resolves: #1393889 Rebase to bind-dyndb-ldap 11+
-- resolves: #1165796 bind-dyndb-ldap crashes if server is shutting down and connection to LDAP is down
-- resolves: #1413805 bind-dyndb-ldap default schema is shipped with syntax error
-
-* Wed Sep 21 2016 Petr Spacek <pspacek@redhat.com> - 10.0-5
-- resolves: #1376851 Unable to set named_write_master_zones boolean on upgrade
-
-* Tue Aug 16 2016 Petr Spacek <pspacek@redhat.com> - 10.0-4
-- resolves: #1366565 Deletion of DNS root zone breaks global forwarding
-
-* Thu Jul 28 2016 Petr Spacek <pspacek@redhat.com> - 10.0-3
-- rebuild against redhat-rpm-config-9.1.0-71.el7 to fix /usr/share/doc naming
-- related: #1057327
-
-* Wed Jul 27 2016 Petr Spacek <pspacek@redhat.com> - 10.0-2
-- resolves: #1359220 prevent crash while reloading previously invalid
-  but now valid DNS zone
-
-* Tue Jun 21 2016 Petr Spacek <pspacek@redhat.com> - 10.0-1
-- update to latest upstream version
-- resolves: #1292145 Rebase bind-dyndb-ldap to latest upstream version
-
-* Thu May 12 2016 Petr Spacek <pspacek@redhat.com> - 9.0-1
-- update to latest upstream version
-- related: #1292145 Rebase bind-dyndb-ldap to latest upstream version
-
 * Tue Jun 23 2015 Petr Spacek <pspacek redhat com> - 8.0-1
 - update to latest upstream version
 - resolves: #1204110 Rebase bind-dyndb-ldap to latest upstream version

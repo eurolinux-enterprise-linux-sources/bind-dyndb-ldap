@@ -1,0 +1,13 @@
+diff --git a/src/mldap.c b/src/mldap.c
+index 0c8327c..3261161 100644
+--- a/src/mldap.c
++++ b/src/mldap.c
+@@ -467,7 +467,7 @@ mldap_iter_deadnodes_next(mldapdb_t *mldap, metadb_iter_t **iterp,
+ 	isc_result_t result;
+ 	dns_dbnode_t *rbt_node = NULL;
+ 	metadb_iter_t *iter = NULL;
+-	isc_uint32_t node_generation;
++	isc_uint32_t node_generation = 0; /* GCC */
+ 	isc_uint32_t cur_generation;
+ 	metadb_node_t metadb_node;
+ 	DECLARE_BUFFERED_NAME(name);

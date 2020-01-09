@@ -6,15 +6,13 @@
 #define _LD_SETTINGS_H_
 
 #include <isc/types.h>
-
-#include <isccfg/grammar.h>
-
 #include "types.h"
 #include "str.h"
 #include "ldap_entry.h"
 
+#define SETTING_LINE_MAXLENGTH 255
+#define SETTING_NAME_SEPARATORS " \t"
 #define SETTING_SET_NAME_LOCAL  "named.conf"
-#define SETTING_SET_NAME_SERVER "LDAP idnsServerConfig object"
 #define SETTING_SET_NAME_GLOBAL "LDAP idnsConfig object"
 #define SETTING_SET_NAME_ZONE   "LDAP idnsZone object"
 
@@ -83,18 +81,11 @@ void
 settings_set_free(settings_set_t **set) ATTR_NONNULLS;
 
 isc_result_t
-setting_set_parse_conf(isc_mem_t *mctx, const char *name,
-		       cfg_type_t *cfg_type_conf, const char *parameters,
-		       const char *file, unsigned long line,
-		       settings_set_t *settings) ATTR_NONNULLS ATTR_CHECKRESULT;
+settings_set_fill(settings_set_t *set, const char *const *argv)
+		  ATTR_NONNULLS ATTR_CHECKRESULT;
 
 isc_boolean_t
 settings_set_isfilled(settings_set_t *set) ATTR_NONNULLS ATTR_CHECKRESULT;
-
-isc_result_t
-setting_find(const char *name, const settings_set_t *set,
-	     isc_boolean_t recursive, isc_boolean_t filled_only,
-	     setting_t **found) ATTR_CHECKRESULT;
 
 isc_result_t
 setting_get_uint(const char * const name, const settings_set_t * const set,
@@ -113,19 +104,11 @@ setting_set(const char *const name, const settings_set_t *set,
 	    const char *const value) ATTR_NONNULLS ATTR_CHECKRESULT;
 
 isc_result_t
-setting_unset(const char *const name, const settings_set_t *set)
-ATTR_NONNULLS ATTR_CHECKRESULT;
-
-isc_result_t
 setting_update_from_ldap_entry(const char *name, settings_set_t *set,
 			       const char *attr_name, ldap_entry_t *entry)
 			       ATTR_NONNULLS ATTR_CHECKRESULT;
 
 isc_result_t
 get_enum_description(const enum_txt_assoc_t *map, int value, const char **desc) ATTR_NONNULLS ATTR_CHECKRESULT;
-
-isc_result_t
-get_enum_value(const enum_txt_assoc_t *map, const char *description,
-	       int *value) ATTR_NONNULLS ATTR_CHECKRESULT;
 
 #endif /* !_LD_SETTINGS_H_ */

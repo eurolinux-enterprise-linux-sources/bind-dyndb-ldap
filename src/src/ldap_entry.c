@@ -163,8 +163,7 @@ ldap_entry_reconstruct(isc_mem_t *mctx, mldapdb_t *mldap, struct berval *uuid,
 		CLEANUP_WITH(ISC_R_NOMEMORY);
 
 	CHECK(mldap_class_get(node, &entry->class));
-	if ((entry->class
-	    & (LDAP_ENTRYCLASS_CONFIG | LDAP_ENTRYCLASS_SERVERCONFIG)) == 0)
+	if ((entry->class & LDAP_ENTRYCLASS_CONFIG) == 0)
 		CHECK(mldap_dnsname_get(node, &entry->fqdn, &entry->zone_name));
 
 	*entryp = entry;
@@ -221,12 +220,6 @@ ldap_entry_parse(isc_mem_t *mctx, LDAP *ld, LDAPMessage *ldap_entry,
 	}
 	entry->uuid = ber_dupbv(NULL, uuid);
 	CHECK(ldap_entry_parseclass(entry, &entry->class));
-	if ((entry->class & LDAP_ENTRYCLASS_TEMPLATE) != 0
-	    && (entry->class
-		& ~(LDAP_ENTRYCLASS_TEMPLATE | LDAP_ENTRYCLASS_RR)) != 0) {
-		log_bug("idnsTemplateObject is not supported with anything "
-			"else than idnsRecord: %s", ldap_entry_logname(entry));
-	}
 
 	if ((entry->class &
 	    (LDAP_ENTRYCLASS_MASTER | LDAP_ENTRYCLASS_FORWARD
@@ -450,16 +443,12 @@ ldap_entry_parseclass(ldap_entry_t *entry, ldap_entryclass_t *class)
 	for (val = HEAD(values); val != NULL; val = NEXT(val, link)) {
 		if (!strcasecmp(val->value, "idnsrecord"))
 			entryclass |= LDAP_ENTRYCLASS_RR;
-		else if (!strcasecmp(val->value, "idnsTemplateObject"))
-			entryclass |= LDAP_ENTRYCLASS_TEMPLATE;
 		else if (!strcasecmp(val->value, "idnszone"))
 			entryclass |= LDAP_ENTRYCLASS_MASTER;
 		else if (!strcasecmp(val->value, "idnsforwardzone"))
 			entryclass |= LDAP_ENTRYCLASS_FORWARD;
 		else if (!strcasecmp(val->value, "idnsconfigobject"))
 			entryclass |= LDAP_ENTRYCLASS_CONFIG;
-		else if (!strcasecmp(val->value, "idnsServerConfigObject"))
-			entryclass |= LDAP_ENTRYCLASS_SERVERCONFIG;
 	}
 
 	if (class == LDAP_ENTRYCLASS_NONE) {
@@ -516,7 +505,7 @@ cleanup:
 }
 
 dns_ttl_t
-ldap_entry_getttl(ldap_entry_t *entry, const settings_set_t * settings)
+ldap_entry_getttl(ldap_entry_t *entry)
 {
 	const char *ttl_attr = "dnsTTL";
 	isc_textregion_t ttl_text;
@@ -526,20 +515,21 @@ ldap_entry_getttl(ldap_entry_t *entry, const settings_set_t * settings)
 
 	REQUIRE(entry != NULL);
 
-	CHECK(ldap_entry_getvalues(entry, ttl_attr, &values));
+	result = ldap_entry_getvalues(entry, ttl_attr, &values);
+	if (result == ISC_R_NOTFOUND)
+		return DEFAULT_TTL;
 
 	ttl_text.base = HEAD(values)->value;
 	ttl_text.length = strlen(ttl_text.base);
-	CHECK(dns_ttl_fromtext(&ttl_text, &ttl));
-	if (ttl > 0x7fffffffUL) {
+	result = dns_ttl_fromtext(&ttl_text, &ttl);
+	if (result != ISC_R_SUCCESS)
+		return DEFAULT_TTL;
+	else if (ttl > 0x7fffffffUL) {
 		log_error("%s: entry TTL %u > MAXTTL, setting TTL to 0",
 			  ldap_entry_logname(entry), ttl);
 		ttl = 0;
 	}
-	return ttl;
 
-cleanup:
-	INSIST(setting_get_uint("default_ttl", settings, &ttl) == ISC_R_SUCCESS);
 	return ttl;
 }
 
@@ -554,11 +544,6 @@ ldap_entry_getclassname(const ldap_entryclass_t class) {
 		return "forward zone";
 	else if ((class & LDAP_ENTRYCLASS_CONFIG) != 0)
 		return "config object";
-	else if ((class & LDAP_ENTRYCLASS_SERVERCONFIG) != 0)
-		return "server config object";
-	else if ((class & LDAP_ENTRYCLASS_RR) != 0
-		 && (class & LDAP_ENTRYCLASS_TEMPLATE) != 0)
-		return "resource record template";
 	else if ((class & LDAP_ENTRYCLASS_RR) != 0)
 		return "resource record";
 	else if (class != 0)

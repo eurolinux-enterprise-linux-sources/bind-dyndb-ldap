@@ -6,11 +6,13 @@
 
 #include <isccfg/aclconf.h>
 #include <isccfg/cfg.h>
+#include <isccfg/namedconf.h>
 #include <isccfg/grammar.h>
 
 #include <isc/buffer.h>
 #include <isc/log.h>
 #include <isc/mem.h>
+#include <isc/once.h>
 #include <isc/result.h>
 #include <isc/types.h>
 #include <isc/util.h>
@@ -28,11 +30,16 @@
 #include <strings.h>
 
 #include "acl.h"
-#include "bindcfg.h"
 #include "str.h"
 #include "util.h"
 #include "log.h"
 #include "types.h"
+
+static isc_once_t once = ISC_ONCE_INIT;
+static cfg_type_t *update_policy;
+static cfg_type_t *allow_query;
+static cfg_type_t *allow_transfer;
+static cfg_type_t *forwarders;
 
 /* Following definitions are necessary for context ("map" configuration object)
  * required during ACL parsing. */
@@ -52,6 +59,105 @@ const enum_txt_assoc_t acl_type_txts[] = {
 	{ acl_type_transfer,	"transfer"	},
 	{ -1,			NULL		} /* end marker */
 };
+
+static cfg_type_t * ATTR_NONNULLS ATTR_CHECKRESULT
+get_type_from_tuplefield(const cfg_type_t *cfg_type, const char *name)
+{
+	cfg_type_t *ret = NULL;
+	const cfg_tuplefielddef_t *field;
+
+	REQUIRE(cfg_type != NULL && cfg_type->of != NULL);
+	REQUIRE(name != NULL);
+
+	field = (cfg_tuplefielddef_t *)cfg_type->of;
+	for (int i = 0; field[i].name != NULL; i++) {
+		if (!strcmp(field[i].name, name)) {
+			ret = field[i].type;
+			break;
+		}
+	}
+
+	return ret;
+}
+
+static cfg_type_t * ATTR_NONNULLS ATTR_CHECKRESULT
+get_type_from_clause(const cfg_clausedef_t *clause, const char *name)
+{
+	cfg_type_t *ret = NULL;
+
+	REQUIRE(clause != NULL);
+	REQUIRE(name != NULL);
+
+	for (int i = 0; clause[i].name != NULL; i++) {
+		if (!strcmp(clause[i].name, name)) {
+			ret = clause[i].type;
+			break;
+		}
+	}
+
+	return ret;
+}
+
+static cfg_type_t * ATTR_NONNULLS ATTR_CHECKRESULT
+get_type_from_clause_array(const cfg_type_t *cfg_type, const char *name)
+{
+	cfg_type_t *ret = NULL;
+	const cfg_clausedef_t **clauses;
+
+	REQUIRE(cfg_type != NULL && cfg_type->of != NULL);
+	REQUIRE(name != NULL);
+
+	clauses = (const cfg_clausedef_t **)cfg_type->of;
+	for (int i = 0; clauses[i] != NULL; i++) {
+		ret = get_type_from_clause(clauses[i], name);
+		if (ret != NULL)
+			break;
+	}
+
+	return ret;
+}
+
+static void
+init_cfgtypes(void)
+{
+	cfg_type_t *zoneopts;
+
+	zoneopts = &cfg_type_namedconf;
+	zoneopts = get_type_from_clause_array(zoneopts, "zone");
+	zoneopts = get_type_from_tuplefield(zoneopts, "options");
+
+	update_policy = get_type_from_clause_array(zoneopts, "update-policy");
+	allow_query = get_type_from_clause_array(zoneopts, "allow-query");
+	allow_transfer = get_type_from_clause_array(zoneopts, "allow-transfer");
+	forwarders = get_type_from_clause_array(zoneopts, "forwarders");
+}
+
+static isc_result_t ATTR_NONNULLS ATTR_CHECKRESULT
+parse(cfg_parser_t *parser, const char *string, cfg_type_t **type,
+      cfg_obj_t **objp)
+{
+	isc_result_t result;
+	isc_buffer_t buffer;
+	size_t string_len;
+	cfg_obj_t *ret = NULL;
+
+	REQUIRE(parser != NULL);
+	REQUIRE(string != NULL);
+	REQUIRE(objp != NULL && *objp == NULL);
+
+	RUNTIME_CHECK(isc_once_do(&once, init_cfgtypes) == ISC_R_SUCCESS);
+
+	string_len = strlen(string);
+	isc_buffer_init(&buffer, (char *)string, string_len);
+	isc_buffer_add(&buffer, string_len);
+
+	result = cfg_parse_buffer(parser, &buffer, *type, &ret);
+
+	if (result == ISC_R_SUCCESS)
+		*objp = ret;
+
+	return result;
+}
 
 /*
  * The rest of the code in this file is either copied from, or based on code
@@ -263,6 +369,24 @@ cleanup:
 	return result;
 }
 
+static isc_result_t ATTR_NONNULLS ATTR_CHECKRESULT
+semicolon_bracket_str(isc_mem_t *mctx, const char *str, ld_string_t **bracket_strp)
+{
+	ld_string_t *tmp = NULL;
+	isc_result_t result;
+
+	CHECK(str_new(mctx, &tmp));
+	CHECK(str_sprintf(tmp, "{ %s; }", str));
+
+	*bracket_strp = tmp;
+
+	return ISC_R_SUCCESS;
+
+cleanup:
+	str_destroy(&tmp);
+	return result;
+}
+
 isc_result_t
 acl_configure_zone_ssutable(const char *policy_str, dns_zone_t *zone)
 {
@@ -284,7 +408,7 @@ acl_configure_zone_ssutable(const char *policy_str, dns_zone_t *zone)
 	CHECK(bracket_str(mctx, policy_str, &new_policy_str));
 
 	CHECK(cfg_parser_create(mctx, dns_lctx, &parser));
-	result = cfg_parse_strbuf(parser, str_buf(new_policy_str), &cfg_type_update_policy, &policy);
+	result = parse(parser, str_buf(new_policy_str), &update_policy, &policy);
 
 	if (result != ISC_R_SUCCESS) {
 		dns_zone_log(zone, ISC_LOG_ERROR,
@@ -385,15 +509,15 @@ acl_from_ldap(isc_mem_t *mctx, const char *aclstr, acl_type_t type,
 
 	CHECK(cfg_parser_create(mctx, dns_lctx, &parser));
 	CHECK(cfg_parser_create(mctx, dns_lctx, &parser_empty));
-	CHECK(cfg_parse_strbuf(parser_empty, "{}", &empty_map_p, &cctx));
+	CHECK(parse(parser_empty, "{}", &empty_map_p, &cctx));
 
 	switch (type) {
 	case acl_type_query:
-		CHECK(cfg_parse_strbuf(parser, str_buf(new_aclstr), &cfg_type_allow_query,
+		CHECK(parse(parser, str_buf(new_aclstr), &allow_query,
 			    &aclobj));
 		break;
 	case acl_type_transfer:
-		CHECK(cfg_parse_strbuf(parser, str_buf(new_aclstr), &cfg_type_allow_transfer,
+		CHECK(parse(parser, str_buf(new_aclstr), &allow_transfer,
 			    &aclobj));
 		break;
 	default:
@@ -425,5 +549,86 @@ cleanup:
 		cfg_parser_destroy(&parser_empty);
 	str_destroy(&new_aclstr);
 
+	return result;
+}
+
+
+/**
+ * Parse nameserver IP address with or without port specified in BIND9 syntax.
+ * IPv4 and IPv6 addresses are supported, see examples.
+ *
+ * @param[in] forwarder_str String with IP address and optionally port.
+ * @param[in] mctx Memory for allocating temporary and sa structure.
+ * @param[out] sa Socket address structure.
+ *
+ * @return Pointer to newly allocated isc_sockaddr_t structure.
+ *
+ * @example
+ * "192.168.0.100" -> { address:192.168.0.100, port:53 }
+ * "192.168.0.100 port 553" -> { address:192.168.0.100, port:553 }
+ * "0102:0304:0506:0708:090A:0B0C:0D0E:0FAA" ->
+ * 		{ address:0102:0304:0506:0708:090A:0B0C:0D0E:0FAA, port:53 }
+ * "0102:0304:0506:0708:090A:0B0C:0D0E:0FAA port 553" ->
+ * 		{ address:0102:0304:0506:0708:090A:0B0C:0D0E:0FAA, port:553 }
+ *
+ */
+isc_result_t
+acl_parse_forwarder(const char *forwarder_str, isc_mem_t *mctx,
+#if LIBDNS_VERSION_MAJOR < 140
+		isc_sockaddr_t **fw)
+#else /* LIBDNS_VERSION_MAJOR >= 140 */
+		dns_forwarder_t **fw)
+#endif
+{
+	isc_result_t result = ISC_R_SUCCESS;
+	cfg_parser_t *parser = NULL;
+
+	cfg_obj_t *forwarders_cfg = NULL;
+	ld_string_t *new_forwarder_str = NULL;
+	const cfg_obj_t *faddresses;
+	const cfg_listelt_t *element;
+	const cfg_obj_t *forwarder;
+	isc_sockaddr_t addr;
+
+	in_port_t port = 53;
+
+	REQUIRE(forwarder_str != NULL);
+	REQUIRE(fw != NULL && *fw == NULL);
+
+	/* add semicolon and brackets as necessary for parser */
+	if (!index(forwarder_str, ';'))
+		CHECK(semicolon_bracket_str(mctx, forwarder_str, &new_forwarder_str));
+	else
+		CHECK(bracket_str(mctx, forwarder_str, &new_forwarder_str));
+
+	CHECK(cfg_parser_create(mctx, dns_lctx, &parser));
+	CHECK(parse(parser, str_buf(new_forwarder_str), &forwarders, &forwarders_cfg));
+
+	faddresses = cfg_tuple_get(forwarders_cfg, "addresses");
+	element = cfg_list_first(faddresses);
+	if (!element) {
+		result = ISC_R_FAILURE;
+		goto cleanup;
+	}
+
+	forwarder = cfg_listelt_value(element);
+	CHECKED_MEM_GET_PTR(mctx, *fw);
+	addr = *cfg_obj_assockaddr(forwarder);
+	if (isc_sockaddr_getport(&addr) == 0)
+		isc_sockaddr_setport(&addr, port);
+#if LIBDNS_VERSION_MAJOR < 140
+	**fw = addr;
+#else /* LIBDNS_VERSION_MAJOR >= 140 */
+	(*fw)->addr = addr;
+	(*fw)->dscp = cfg_obj_getdscp(forwarder);
+#endif
+
+
+cleanup:
+	if (forwarders_cfg != NULL)
+		cfg_obj_destroy(parser, &forwarders_cfg);
+	if (parser != NULL)
+		cfg_parser_destroy(&parser);
+	str_destroy(&new_forwarder_str);
 	return result;
 }

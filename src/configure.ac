@@ -1,9 +1,9 @@
 AC_PREREQ([2.59])
-AC_INIT([bind-dyndb-ldap], [11.1], [freeipa-devel@redhat.com])
+AC_INIT([bind-dyndb-ldap], [8.0], [freeipa-devel@redhat.com])
 
 AM_INIT_AUTOMAKE([-Wall foreign dist-bzip2])
 
-AC_CONFIG_SRCDIR([src/ldap_driver.c])
+AC_CONFIG_SRCDIR([src/zone_manager.h])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -36,20 +36,6 @@ AC_TRY_COMPILE([
 ],[],
 [AC_MSG_RESULT([yes])
  AC_DEFINE([HAVE_VISIBILITY], 1, [Define if compiler supports -fvisibility])],
-[CFLAGS="$SAVED_CFLAGS"
- AC_MSG_RESULT([no])])
-
-# Check if build chain supports -fno-delete-null-pointer-checks
-# this flag avoids too agressive optimizations which would remove some asserts
-# BIND 9 did the same in its commit 603a78708343f063b44affb882ef93bb19a5142a
-AC_MSG_CHECKING([for -fno-delete-null-pointer-checks compiler flag])
-SAVED_CFLAGS="$CFLAGS"
-CFLAGS="-fno-delete-null-pointer-checks -Werror"
-AC_TRY_COMPILE([
-	extern int fdef(void);
-],[],
-[AC_MSG_RESULT([yes])
- CFLAGS="$SAVED_CFLAGS -fno-delete-null-pointer-checks"],
 [CFLAGS="$SAVED_CFLAGS"
  AC_MSG_RESULT([no])])
 
@@ -105,18 +91,18 @@ int main(void) {
 [AC_MSG_ERROR([Cross compiling is not supported.])]
 )
 
-dnl isc_errno_toresult() was not available in older header files
-AC_MSG_CHECKING([isc_errno_toresult availability])
+dnl isc__errno2result() is typically not present in standard header files
+AC_MSG_CHECKING([isc__errno2result availability in header files])
 AC_TRY_RUN([
-#include <isc/errno.h>
+#include <isc/errno2result.h>
 int main(void) {
-	isc_errno_toresult(0);
+	isc__errno2result(0);
 	return 0;
 }],
 [AC_MSG_RESULT([yes])],
 [AC_MSG_ERROR([
- Can't find isc_errno_toresult() or header isc/errno.h:
- Please install bind-devel package or similar.])],
+ Can't find isc__errno2result() or header isc/errno2result.h:
+ Please install bind-lite-devel package or similar.])],
 [AC_MSG_ERROR([Cross compiling is not supported.])]
 )
 

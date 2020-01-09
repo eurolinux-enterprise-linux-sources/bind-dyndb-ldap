@@ -7,13 +7,10 @@
 
 #include <string.h>
 
-#include <isc/boolean.h>
 #include <isc/mem.h>
 #include <isc/buffer.h>
-#include <isc/result.h>
 #include <dns/types.h>
 #include <dns/name.h>
-#include <dns/result.h>
 
 #include "log.h"
 
@@ -106,15 +103,11 @@ extern isc_boolean_t verbose_checks; /* from settings.c */
 /* If no argument index list is given to the nonnull attribute,
  * all pointer arguments are marked as non-null. */
 #define ATTR_NONNULLS     ATTR_NONNULL()
-#if defined(__COVERITY__) || defined(__clang_analyzer__)
+#ifdef __GNUC__
 #define ATTR_NONNULL(...) __attribute__((nonnull(__VA_ARGS__)))
-#else
-#define ATTR_NONNULL(...)
-#endif
-
-#if defined(__GNUC__)
 #define ATTR_CHECKRESULT __attribute__((warn_unused_result))
 #else
+#define ATTR_NONNULL(...)
 #define ATTR_CHECKRESULT
 #endif
 

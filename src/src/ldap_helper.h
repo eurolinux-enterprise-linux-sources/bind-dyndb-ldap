@@ -9,7 +9,6 @@
 
 #include <isc/eventclass.h>
 #include <isc/util.h>
-#include <isccfg/cfg.h>
 
 #include <ldap.h>
 
@@ -41,13 +40,14 @@ void free_rdatalist(isc_mem_t *mctx, dns_rdatalist_t *rdlist) ATTR_NONNULLS;
  */
 
 isc_result_t
-new_ldap_instance(isc_mem_t *mctx, const char *db_name, const char *parameters,
-		  const char *file, unsigned long line,
-		  const dns_dyndbctx_t *dctx, ldap_instance_t **ldap_instp) ATTR_NONNULLS;
+new_ldap_instance(isc_mem_t *mctx, const char *db_name,
+		  const char * const *argv, dns_dyndb_arguments_t *dyndb_args,
+		  isc_task_t *task, ldap_instance_t **ldap_instp) ATTR_NONNULLS;
 void destroy_ldap_instance(ldap_instance_t **ldap_inst) ATTR_NONNULLS;
 
 isc_result_t
-ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock)
+ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name,
+		  isc_boolean_t lock, isc_boolean_t preserve_forwarding)
 		  ATTR_NONNULLS;
 
 /* Functions for writing to LDAP. */
@@ -78,8 +78,6 @@ ldap_mod_free(isc_mem_t *mctx, LDAPMod **changep);
 
 settings_set_t * ldap_instance_getsettings_local(ldap_instance_t *ldap_inst) ATTR_NONNULLS;
 
-settings_set_t * ldap_instance_getsettings_server(ldap_instance_t *ldap_inst) ATTR_NONNULLS;
-
 const char * ldap_instance_getdbname(ldap_instance_t *ldap_inst) ATTR_NONNULLS;
 
 zone_register_t * ldap_instance_getzr(ldap_instance_t *ldap_inst) ATTR_NONNULLS;
@@ -97,12 +95,5 @@ ldap_instance_untaint_start(ldap_instance_t *ldap_inst);
 
 isc_result_t
 ldap_instance_untaint_finish(ldap_instance_t *ldap_inst, unsigned int count);
-
-void
-ldap_instance_attachview(ldap_instance_t *ldap_inst, dns_view_t **view) ATTR_NONNULLS;
-
-void
-ldap_instance_attachmem(ldap_instance_t *ldap_inst, isc_mem_t **mctx)
-			ATTR_NONNULLS;
 
 #endif /* !_LD_LDAP_HELPER_H_ */
