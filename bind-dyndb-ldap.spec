@@ -6,7 +6,7 @@
 
 Name:           bind-dyndb-ldap
 Version:        2.3
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
@@ -28,6 +28,12 @@ Patch2: 0002-Fix-crash-caused-by-zonesub-match-type-in-update-ACL.patch
 Patch3: 0003-Prevent-false-zone-serial-2012060301-unchanged-error.patch
 Patch4: 0004-Prevent-deadlock-in-sync-ptr.patch
 
+# https://bugzilla.redhat.com/show_bug.cgi?id=1175318
+Patch5: 1175318-0001-Add-helper-functions-for-generic-iteration-over-RBT.patch
+Patch6: 1175318-0002-Add-missing-includes-to-util.h.patch
+Patch7: 1175318-0003-Add-support-for-pure-forward-zones-idnsForwardZone-o.patch
+Patch8: 1175318-0004-Make-RBT-iterators-more-resilient.patch
+
 %description
 This package provides an LDAP back-end plug-in for BIND. It features
 support for dynamic updates and internal caching, to lift the load
@@ -42,6 +48,10 @@ off of your LDAP server.
 %patch2 -p1 -b .rh921167
 %patch3 -p1 -b .rh908780
 %patch4 -p1 -b .rh1010396
+%patch5 -p1 -b .rh1175318-1
+%patch6 -p1 -b .rh1175318-2
+%patch7 -p1 -b .rh1175318-3
+%patch8 -p1 -b .rh1175318-4
 
 %build
 export CPPFLAGS=`isc-config.sh --cflags`
@@ -70,6 +80,9 @@ rm -rf %{buildroot}
 
 
 %changelog
+* Fri Dec 19 2014 Petr Spacek <pspacek redhat com> - 2.3-6
+- support forward zones introduced in bind-dyndb-ldap 3.x (#1175318)
+
 * Thu Sep 26 2013 Petr Spacek <pspacek redhat com> - 2.3-5
 - prevent deadlock in PTR record synchronization (#1010396)
 

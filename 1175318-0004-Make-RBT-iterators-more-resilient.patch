@@ -1,0 +1,303 @@
+From 54d36be6a3cd3174e24ec93c24a8ef617d384675 Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Tue, 2 Apr 2013 18:46:48 +0200
+Subject: [PATCH 4/4] Make RBT iterators more resilient.
+
+RBT iterators interface uses pointer to pointer to iterator.
+Static allocation of iterators is not longer allowed.
+Multiple rbt_iter_stop() calls on the same variable
+will not crash plugin.
+
+Signed-off-by: Petr Spacek <pspacek@redhat.com>
+---
+ src/fwd_register.c  |  2 +-
+ src/fwd_register.h  |  2 +-
+ src/ldap_helper.c   |  4 +++-
+ src/rbt_helper.c    | 66 ++++++++++++++++++++++++++++++++++++-----------------
+ src/rbt_helper.h    | 15 +++---------
+ src/zone_register.c |  9 ++++++++
+ src/zone_register.h |  6 +++++
+ 7 files changed, 68 insertions(+), 36 deletions(-)
+
+diff --git a/src/fwd_register.c b/src/fwd_register.c
+index c663b25..81eaac5 100644
+--- a/src/fwd_register.c
++++ b/src/fwd_register.c
+@@ -146,7 +146,7 @@ cleanup:
+ }
+ 
+ isc_result_t
+-fwdr_rbt_iter_init(fwd_register_t *fwdr, rbt_iterator_t *iter,
++fwdr_rbt_iter_init(fwd_register_t *fwdr, rbt_iterator_t **iter,
+ 		   dns_name_t *nodename) {
+ 	if (fwdr->rbt == NULL)
+ 		return ISC_R_NOTFOUND;
+diff --git a/src/fwd_register.h b/src/fwd_register.h
+index 0bee3cb..5fb96c0 100644
+--- a/src/fwd_register.h
++++ b/src/fwd_register.h
+@@ -29,7 +29,7 @@ isc_result_t
+ fwdr_zone_ispresent(fwd_register_t *fwdr, dns_name_t *name);
+ 
+ isc_result_t
+-fwdr_rbt_iter_init(fwd_register_t *fwdr, rbt_iterator_t *iter,
++fwdr_rbt_iter_init(fwd_register_t *fwdr, rbt_iterator_t **iter,
+ 		   dns_name_t *nodename);
+ 
+ #endif /* !_LD_FWD_REGISTER_H_ */
+diff --git a/src/ldap_helper.c b/src/ldap_helper.c
+index 185d4d6..8febc2d 100644
+--- a/src/ldap_helper.c
++++ b/src/ldap_helper.c
+@@ -1589,7 +1589,7 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 
+ 	/* Walk through master zone register and remove all zones which
+ 	 * disappeared from LDAP. */
+-	rbt_iterator_t iter;
++	rbt_iterator_t *iter = NULL;
+ 	char name_txt[DNS_NAME_FORMATSIZE];
+ 	DECLARE_BUFFERED_NAME(registered_name);
+ 	DECLARE_BUFFERED_NAME(ldap_name);
+@@ -1628,6 +1628,7 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 	/* Walk through forward zone register and remove all zones which
+ 	 * disappeared from LDAP. */
+ 	INIT_BUFFERED_NAME(registered_name);
++	iter = NULL;
+ 	result = fwdr_rbt_iter_init(ldap_inst->fwd_register, &iter, &registered_name);
+ 	while (result == ISC_R_SUCCESS) {
+ 		void *data = NULL;
+@@ -1665,6 +1666,7 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 		goto cleanup;
+ 
+ cleanup:
++	rbt_iter_stop(&iter);
+ 	if (master_rbt != NULL)
+ 		dns_rbt_destroy(&master_rbt);
+ 	if (forward_rbt != NULL)
+diff --git a/src/rbt_helper.c b/src/rbt_helper.c
+index f8b1869..2bc1eff 100644
+--- a/src/rbt_helper.c
++++ b/src/rbt_helper.c
+@@ -5,6 +5,16 @@
+ 
+ #define LDAPDB_RBTITER_MAGIC ISC_MAGIC('L', 'D', 'P', 'I')
+ 
++struct rbt_iterator {
++	unsigned int		magic;
++	isc_mem_t		*mctx;
++	dns_rbt_t		*rbt;
++	isc_rwlock_t		*rwlock;
++	isc_rwlocktype_t	locktype;
++	dns_rbtnodechain_t	chain;
++};
++
++
+ /**
+  * Copy the RBT node name, i.e. copies the name pointed to by RBT iterator.
+  *
+@@ -48,7 +58,7 @@ cleanup:
+  * unlocked by reaching end of iteration or explicit rbt_iter_stop() call.
+  *
+  * @param[in,out] rwlock   guard for RBT, will be read-locked
+- * @param[out]    iter     iterator structure, will be initialized
++ * @param[out]    iterp    iterator structure, will be initialized
+  * @param[out]    nodename dns_name with pre-allocated storage
+  *
+  * @pre Nodename has pre-allocated storage space.
+@@ -63,14 +73,16 @@ cleanup:
+  */
+ isc_result_t
+ rbt_iter_first(isc_mem_t *mctx, dns_rbt_t *rbt, isc_rwlock_t *rwlock,
+-	       rbt_iterator_t *iter, dns_name_t *nodename) {
++	       rbt_iterator_t **iterp, dns_name_t *nodename) {
+ 
+ 	isc_result_t result;
++	rbt_iterator_t *iter = NULL;
+ 
+ 	REQUIRE(rbt != NULL);
+ 	REQUIRE(rwlock != NULL);
+-	REQUIRE(iter != NULL);
++	REQUIRE(iterp != NULL && *iterp == NULL);
+ 
++	CHECKED_MEM_GET_PTR(mctx, iter);
+ 	ZERO_PTR(iter);
+ 
+ 	isc_mem_attach(mctx, &iter->mctx);
+@@ -83,24 +95,28 @@ rbt_iter_first(isc_mem_t *mctx, dns_rbt_t *rbt, isc_rwlock_t *rwlock,
+ 	RWLOCK(iter->rwlock, iter->locktype);
+ 
+ 	result = dns_rbtnodechain_first(&iter->chain, rbt, NULL, NULL);
+-	if (result != DNS_R_NEWORIGIN) {
+-		rbt_iter_stop(iter);
+-		return result;
+-	}
++	if (result != DNS_R_NEWORIGIN)
++		goto cleanup;
+ 
+ 	result = rbt_iter_getnodename(iter, nodename);
+ 	if (result == DNS_R_EMPTYNAME)
+-		result = rbt_iter_next(iter, nodename);
++		result = rbt_iter_next(&iter, nodename);
+ 	if (result == ISC_R_NOMORE)
+ 		result = ISC_R_NOTFOUND;
+ 
++cleanup:
++	if (result == ISC_R_SUCCESS)
++		*iterp = iter;
++	else
++		rbt_iter_stop(&iter);
++
+ 	return result;
+ }
+ 
+ /**
+  * Copy name of the next non-empty node in RBT.
+  *
+- * @param[in]  iter      valid iterator
++ * @param[in]  iterp     valid iterator
+  * @param[out] nodename  dns_name with pre-allocated storage
+  *
+  * @pre Nodename has pre-allocated storage space.
+@@ -110,42 +126,50 @@ rbt_iter_first(isc_mem_t *mctx, dns_rbt_t *rbt, isc_rwlock_t *rwlock,
+  * @retval ISC_R_NOMORE  Iteration ended, RBT is in unlocked state,
+  *                       iterator is no longer valid.
+  * @retval others        Errors from dns_name_concatenate() and others.
++ *                       RBT is in unlocked state, iterator is no longer valid.
+  */
+ isc_result_t
+-rbt_iter_next(rbt_iterator_t *iter, dns_name_t *nodename) {
++rbt_iter_next(rbt_iterator_t **iterp, dns_name_t *nodename) {
+ 	isc_result_t result;
+ 
+-	REQUIRE(iter != NULL);
+-	REQUIRE(ISC_MAGIC_VALID(iter, LDAPDB_RBTITER_MAGIC));
+-	REQUIRE(iter->locktype != isc_rwlocktype_none);
++	REQUIRE(iterp != NULL && *iterp != NULL);
++	REQUIRE(ISC_MAGIC_VALID(*iterp, LDAPDB_RBTITER_MAGIC));
++	REQUIRE((*iterp)->locktype != isc_rwlocktype_none);
+ 
+ 	do {
+-		result = dns_rbtnodechain_next(&iter->chain, NULL, NULL);
++		result = dns_rbtnodechain_next(&(*iterp)->chain, NULL, NULL);
+ 		if (result != ISC_R_SUCCESS && result != DNS_R_NEWORIGIN)
+ 			goto cleanup;
+ 
+-		result = rbt_iter_getnodename(iter, nodename);
++		result = rbt_iter_getnodename(*iterp, nodename);
+ 	} while (result == DNS_R_EMPTYNAME);
+ 
+ cleanup:
+ 	if (result != ISC_R_SUCCESS)
+-		rbt_iter_stop(iter);
++		rbt_iter_stop(iterp);
+ 
+ 	return result;
+ }
+ 
+ /**
+  * Stop RBT iteration and unlock RBT.
++ * @param[in] iterp    valid iterator or NULL
+  */
+ void
+-rbt_iter_stop(rbt_iterator_t *iter) {
+-	REQUIRE(iter != NULL);
+-	REQUIRE(ISC_MAGIC_VALID(iter, LDAPDB_RBTITER_MAGIC));
++rbt_iter_stop(rbt_iterator_t **iterp) {
++	rbt_iterator_t *iter;
++
++	REQUIRE(iterp != NULL);
++	iter = *iterp;
+ 
++	if (iter == NULL)
++		return;
++
++	REQUIRE(ISC_MAGIC_VALID(iter, LDAPDB_RBTITER_MAGIC));
++	iter->magic = 0;
+ 	if (iter->locktype != isc_rwlocktype_none)
+ 		isc_rwlock_unlock(iter->rwlock, iter->locktype);
+ 
+ 	dns_rbtnodechain_invalidate(&iter->chain);
+-	isc_mem_detach(&(iter->mctx));
+-	ZERO_PTR(iter);
++	MEM_PUT_AND_DETACH(*iterp);
+ }
+diff --git a/src/rbt_helper.h b/src/rbt_helper.h
+index 9c9bcd2..98aef20 100644
+--- a/src/rbt_helper.h
++++ b/src/rbt_helper.h
+@@ -5,25 +5,16 @@
+ #include <dns/rbt.h>
+ #include "util.h"
+ 
+-struct rbt_iterator {
+-	unsigned int		magic;
+-	isc_mem_t		*mctx;
+-	dns_rbt_t		*rbt;
+-	isc_rwlock_t		*rwlock;
+-	isc_rwlocktype_t	locktype;
+-	dns_rbtnodechain_t	chain;
+-};
+-
+ typedef struct rbt_iterator	rbt_iterator_t;
+ 
+ isc_result_t
+ rbt_iter_first(isc_mem_t *mctx, dns_rbt_t *rbt, isc_rwlock_t *rwlock,
+-	       rbt_iterator_t *iter, dns_name_t *nodename);
++	       rbt_iterator_t **iter, dns_name_t *nodename);
+ 
+ isc_result_t
+-rbt_iter_next(rbt_iterator_t *iter, dns_name_t *nodename);
++rbt_iter_next(rbt_iterator_t **iter, dns_name_t *nodename);
+ 
+ void
+-rbt_iter_stop(rbt_iterator_t *iter);
++rbt_iter_stop(rbt_iterator_t **iter);
+ 
+ #endif /* !_LD_RBT_HELPER_H_ */
+diff --git a/src/zone_register.c b/src/zone_register.c
+index 7630573..d520b5a 100644
+--- a/src/zone_register.c
++++ b/src/zone_register.c
+@@ -59,6 +59,15 @@ typedef struct {
+ /* Callback for dns_rbt_create(). */
+ static void delete_zone_info(void *arg1, void *arg2);
+ 
++isc_result_t
++zr_rbt_iter_init(zone_register_t *zr, rbt_iterator_t **iter,
++		 dns_name_t *nodename) {
++	if (zr->rbt == NULL)
++		return ISC_R_NOTFOUND;
++
++	return rbt_iter_first(zr->mctx, zr->rbt, &zr->rwlock, iter, nodename);
++}
++
+ dns_rbt_t *
+ zr_get_rbt(zone_register_t *zr)
+ {
+diff --git a/src/zone_register.h b/src/zone_register.h
+index dea2c9d..5553013 100644
+--- a/src/zone_register.h
++++ b/src/zone_register.h
+@@ -21,6 +21,8 @@
+ #ifndef _LD_ZONE_REGISTER_H_
+ #define _LD_ZONE_REGISTER_H_
+ 
++#include "rbt_helper.h"
++
+ typedef struct zone_register zone_register_t;
+ 
+ isc_result_t
+@@ -42,6 +44,10 @@ zr_get_zone_dn(zone_register_t *zr, dns_name_t *name, const char **dn,
+ isc_result_t
+ zr_get_zone_ptr(zone_register_t *zr, dns_name_t *name, dns_zone_t **zonep);
+ 
++isc_result_t
++zr_rbt_iter_init(zone_register_t *zr, rbt_iterator_t **iter,
++		 dns_name_t *nodename);
++
+ dns_rbt_t *
+ zr_get_rbt(zone_register_t *zr);
+ 
+-- 
+2.1.0
+

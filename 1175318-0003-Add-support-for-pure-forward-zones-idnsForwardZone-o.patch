@@ -1,0 +1,935 @@
+From 4bdfc2090b0d2a5a984c52b17885ff32ba00fee1 Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Fri, 22 Mar 2013 12:38:55 +0100
+Subject: [PATCH 3/4] Add support for pure forward zones - idnsForwardZone
+ objectClass.
+
+Master zones are stored in zone_register and pure forward zones
+are stored in fwd_register.
+
+This patch doesn't remove support for forward zones within
+idnsZone objectClass. Support for forward zones in both
+objectClasses enables incremental update, where old and new
+plugin versions operate on the same LDAP database.
+
+Support for forward zones defined by idnsZone objectClass
+will be removed in near future.
+
+Forward zones defined in idnsZone objectClass are not disabled
+after removing from LDAP if persistent search is disabled
+(see ticket #106).
+This problem doesn't affect zones defined with idnsForwardZone
+objectClass.
+
+https://fedorahosted.org/bind-dyndb-ldap/ticket/99
+
+Signed-off-by: Petr Spacek <pspacek@redhat.com>
+---
+ src/Makefile.am    |   4 +
+ src/fwd_register.c | 156 ++++++++++++++++++++++++
+ src/fwd_register.h |  35 ++++++
+ src/ldap_entry.c   |  33 ++++--
+ src/ldap_entry.h   |   7 +-
+ src/ldap_helper.c  | 340 ++++++++++++++++++++++++++++++++++-------------------
+ 6 files changed, 443 insertions(+), 132 deletions(-)
+ create mode 100644 src/fwd_register.c
+ create mode 100644 src/fwd_register.h
+
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 2522557..87c3252 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -5,11 +5,13 @@ HDRS =				\
+ 	acl.h			\
+ 	cache.h			\
+ 	compat.h		\
++	fwd_register.h		\
+ 	krb5_helper.h		\
+ 	ldap_convert.h		\
+ 	ldap_entry.h		\
+ 	ldap_helper.h		\
+ 	log.h			\
++	rbt_helper.h		\
+ 	rdlist.h		\
+ 	semaphore.h		\
+ 	settings.h		\
+@@ -23,12 +25,14 @@ ldap_la_SOURCES =		\
+ 	$(HDRS)			\
+ 	acl.c			\
+ 	cache.c			\
++	fwd_register.c		\
+ 	krb5_helper.c		\
+ 	ldap_convert.c		\
+ 	ldap_driver.c		\
+ 	ldap_entry.c		\
+ 	ldap_helper.c		\
+ 	log.c			\
++	rbt_helper.c		\
+ 	rdlist.c		\
+ 	semaphore.c		\
+ 	settings.c		\
+diff --git a/src/fwd_register.c b/src/fwd_register.c
+new file mode 100644
+index 0000000..c663b25
+--- /dev/null
++++ b/src/fwd_register.c
+@@ -0,0 +1,156 @@
++#include <isc/rwlock.h>
++#include <dns/name.h>
++
++#include "rbt_helper.h"
++#include "fwd_register.h"
++#include "util.h"
++
++struct fwd_register {
++	isc_mem_t	*mctx;
++	isc_rwlock_t	rwlock;
++	dns_rbt_t	*rbt;
++};
++
++isc_result_t
++fwdr_create(isc_mem_t *mctx, fwd_register_t **fwdrp)
++{
++	isc_result_t result;
++	fwd_register_t *fwdr = NULL;
++
++	REQUIRE(fwdrp != NULL && *fwdrp == NULL);
++
++	CHECKED_MEM_GET_PTR(mctx, fwdr);
++	ZERO_PTR(fwdr);
++	isc_mem_attach(mctx, &fwdr->mctx);
++	CHECK(dns_rbt_create(mctx, NULL, NULL, &fwdr->rbt));
++	CHECK(isc_rwlock_init(&fwdr->rwlock, 0, 0));
++
++	*fwdrp = fwdr;
++	return ISC_R_SUCCESS;
++
++cleanup:
++	if (fwdr != NULL) {
++		if (fwdr->rbt != NULL)
++			dns_rbt_destroy(&fwdr->rbt);
++		MEM_PUT_AND_DETACH(fwdr);
++	}
++
++	return result;
++}
++
++void
++fwdr_destroy(fwd_register_t **fwdrp)
++{
++	fwd_register_t *fwdr;
++
++	if (fwdrp == NULL || *fwdrp == NULL)
++		return;
++
++	fwdr = *fwdrp;
++
++	RWLOCK(&fwdr->rwlock, isc_rwlocktype_write);
++	dns_rbt_destroy(&fwdr->rbt);
++	RWUNLOCK(&fwdr->rwlock, isc_rwlocktype_write);
++	isc_rwlock_destroy(&fwdr->rwlock);
++	MEM_PUT_AND_DETACH(fwdr);
++
++	*fwdrp = NULL;
++}
++
++/*
++ * Add forward zone to the forwarding register 'fwdr'. Origin of the zone
++ * must be absolute and the zone cannot already be in the register.
++ */
++isc_result_t
++fwdr_add_zone(fwd_register_t *fwdr, dns_name_t *name)
++{
++	isc_result_t result;
++	void *dummy = NULL;
++
++	REQUIRE(fwdr != NULL);
++	REQUIRE(name != NULL);
++
++	if (!dns_name_isabsolute(name)) {
++		log_bug("forward zone with bad origin");
++		return ISC_R_FAILURE;
++	}
++
++	RWLOCK(&fwdr->rwlock, isc_rwlocktype_write);
++
++	/*
++	 * First make sure the node doesn't exist. Partial matches mean
++	 * there are also child zones in the LDAP database which is allowed.
++	 */
++	result = dns_rbt_findname(fwdr->rbt, name, 0, NULL, &dummy);
++	if (result != ISC_R_NOTFOUND && result != DNS_R_PARTIALMATCH) {
++		if (result == ISC_R_SUCCESS)
++			result = ISC_R_EXISTS;
++		log_error_r("failed to add forward zone to the forwarding register");
++		goto cleanup;
++	}
++
++	CHECK(dns_rbt_addname(fwdr->rbt, name, FORWARDING_SET_MARK));
++
++cleanup:
++	RWUNLOCK(&fwdr->rwlock, isc_rwlocktype_write);
++
++	return result;
++}
++
++isc_result_t
++fwdr_del_zone(fwd_register_t *fwdr, dns_name_t *name)
++{
++	isc_result_t result;
++	void *dummy = NULL;
++
++	REQUIRE(fwdr != NULL);
++	REQUIRE(name != NULL);
++
++	RWLOCK(&fwdr->rwlock, isc_rwlocktype_write);
++
++	result = dns_rbt_findname(fwdr->rbt, name, 0, NULL, (void **)&dummy);
++	if (result == ISC_R_NOTFOUND || result == DNS_R_PARTIALMATCH) {
++		/* We are done */
++		CLEANUP_WITH(ISC_R_SUCCESS);
++	} else if (result != ISC_R_SUCCESS) {
++		goto cleanup;
++	}
++
++	CHECK(dns_rbt_deletename(fwdr->rbt, name, ISC_FALSE));
++
++cleanup:
++	RWUNLOCK(&fwdr->rwlock, isc_rwlocktype_write);
++
++	return result;
++}
++
++isc_result_t
++fwdr_zone_ispresent(fwd_register_t *fwdr, dns_name_t *name) {
++
++	isc_result_t result;
++	void *dummy = NULL;
++
++	REQUIRE(fwdr != NULL);
++	REQUIRE(name != NULL);
++
++	RWLOCK(&fwdr->rwlock, isc_rwlocktype_read);
++
++	result = dns_rbt_findname(fwdr->rbt, name, 0, NULL, (void **)&dummy);
++	if (result == DNS_R_PARTIALMATCH)
++		CLEANUP_WITH(ISC_R_NOTFOUND);
++
++cleanup:
++	RWUNLOCK(&fwdr->rwlock, isc_rwlocktype_read);
++
++	return result;
++}
++
++isc_result_t
++fwdr_rbt_iter_init(fwd_register_t *fwdr, rbt_iterator_t *iter,
++		   dns_name_t *nodename) {
++	if (fwdr->rbt == NULL)
++		return ISC_R_NOTFOUND;
++
++	return rbt_iter_first(fwdr->mctx, fwdr->rbt, &fwdr->rwlock, iter,
++			      nodename);
++}
+diff --git a/src/fwd_register.h b/src/fwd_register.h
+new file mode 100644
+index 0000000..0bee3cb
+--- /dev/null
++++ b/src/fwd_register.h
+@@ -0,0 +1,35 @@
++#ifndef _LD_FWD_REGISTER_H_
++#define _LD_FWD_REGISTER_H_
++
++#include <dns/rbt.h>
++#include <dns/result.h>
++
++#define FORWARDING_SET_MARK ((void *)1)
++/*
++#if FORWARDING_SET_MARK == NULL
++	#error "FAIL!"
++#endif
++*/
++
++typedef struct fwd_register fwd_register_t;
++
++isc_result_t
++fwdr_create(isc_mem_t *mctx, fwd_register_t **fwdrp);
++
++void
++fwdr_destroy(fwd_register_t **fwdrp);
++
++isc_result_t
++fwdr_add_zone(fwd_register_t *fwdr, dns_name_t *zone);
++
++isc_result_t
++fwdr_del_zone(fwd_register_t *fwdr, dns_name_t *zone);
++
++isc_result_t
++fwdr_zone_ispresent(fwd_register_t *fwdr, dns_name_t *name);
++
++isc_result_t
++fwdr_rbt_iter_init(fwd_register_t *fwdr, rbt_iterator_t *iter,
++		   dns_name_t *nodename);
++
++#endif /* !_LD_FWD_REGISTER_H_ */
+diff --git a/src/ldap_entry.c b/src/ldap_entry.c
+index 52b927d..8184791 100644
+--- a/src/ldap_entry.c
++++ b/src/ldap_entry.c
+@@ -389,32 +389,51 @@ cleanup:
+ 	return result;
+ }
+ 
+-ldap_entryclass_t
+-ldap_entry_getclass(ldap_entry_t *entry)
++isc_result_t
++ldap_entry_getclass(ldap_entry_t *entry, ldap_entryclass_t *class)
+ {
+ 	ldap_valuelist_t values;
+ 	ldap_value_t *val;
+ 	ldap_entryclass_t entryclass;
+ 
+ 	REQUIRE(entry != NULL);
++	REQUIRE(class != NULL);
+ 
+ 	entryclass = LDAP_ENTRYCLASS_NONE;
+ 
+-	/* XXX Can this happen? */
++	/* ObjectClass will be missing if search parameters didn't request
++	 * objectClass attribute. */
+ 	if (ldap_entry_getvalues(entry, "objectClass", &values)
+-	    != ISC_R_SUCCESS)
+-		return entryclass;
++	    != ISC_R_SUCCESS) {
++		log_bug("entry without objectClass");
++		return ISC_R_UNEXPECTED;
++	}
+ 
+ 	for (val = HEAD(values); val != NULL; val = NEXT(val, link)) {
+ 		if (!strcasecmp(val->value, "idnsrecord"))
+ 			entryclass |= LDAP_ENTRYCLASS_RR;
+ 		else if (!strcasecmp(val->value, "idnszone"))
+-			entryclass |= LDAP_ENTRYCLASS_ZONE;
++			entryclass |= LDAP_ENTRYCLASS_MASTER;
++		else if (!strcasecmp(val->value, "idnsforwardzone"))
++			entryclass |= LDAP_ENTRYCLASS_FORWARD;
+ 		else if (!strcasecmp(val->value, "idnsconfigobject"))
+ 			entryclass |= LDAP_ENTRYCLASS_CONFIG;
+ 	}
+ 
+-	return entryclass;
++	if (class == LDAP_ENTRYCLASS_NONE) {
++		log_error("entry '%s' has no supported object class",
++			  entry->dn);
++		return ISC_R_NOTIMPLEMENTED;
++
++	} else if ((entryclass & LDAP_ENTRYCLASS_MASTER) &&
++		   (entryclass & LDAP_ENTRYCLASS_FORWARD)) {
++		log_error("zone '%s' has to have type either "
++			  "'master' or 'forward'", entry->dn);
++		return ISC_R_UNEXPECTED;
++	}
++
++	*class = entryclass;
++	return ISC_R_SUCCESS;
+ 
+ #if 0
+ 	/* Preserve current attribute iterator */
+diff --git a/src/ldap_entry.h b/src/ldap_entry.h
+index 02923a8..d4ee9af 100644
+--- a/src/ldap_entry.h
++++ b/src/ldap_entry.h
+@@ -64,8 +64,9 @@ struct ldap_attribute {
+ 
+ #define LDAP_ENTRYCLASS_NONE	0x0
+ #define LDAP_ENTRYCLASS_RR	0x1
+-#define LDAP_ENTRYCLASS_ZONE	0x2
++#define LDAP_ENTRYCLASS_MASTER	0x2
+ #define LDAP_ENTRYCLASS_CONFIG	0x4
++#define LDAP_ENTRYCLASS_FORWARD	0x8
+ 
+ typedef unsigned char		ldap_entryclass_t;
+ 
+@@ -116,8 +117,8 @@ ldap_entry_getfakesoa(ldap_entry_t *entry, const ld_string_t *fake_mname,
+  * Get entry class (bitwise OR of the LDAP_ENTRYCLASS_*). Note that
+  * you must ldap_search for objectClass attribute!
+  */
+-ldap_entryclass_t
+-ldap_entry_getclass(ldap_entry_t *entry);
++isc_result_t
++ldap_entry_getclass(ldap_entry_t *entry, ldap_entryclass_t *class);
+ 
+ /*
+  * ldap_attr_nextvalue
+diff --git a/src/ldap_helper.c b/src/ldap_helper.c
+index 4c3455c..185d4d6 100644
+--- a/src/ldap_helper.c
++++ b/src/ldap_helper.c
+@@ -78,6 +78,8 @@
+ #include "util.h"
+ #include "zone_manager.h"
+ #include "zone_register.h"
++#include "rbt_helper.h"
++#include "fwd_register.h"
+ 
+ 
+ /* Max type length definitions, from lib/dns/master.c */
+@@ -155,6 +157,7 @@ struct ldap_instance {
+ 
+ 	/* Our own list of zones. */
+ 	zone_register_t		*zone_register;
++	fwd_register_t		*fwd_register;
+ 
+ 	/* krb5 kinit mutex */
+ 	isc_mutex_t		kinit_lock;
+@@ -310,6 +313,9 @@ static isc_result_t soa_serial_increment(isc_mem_t *mctx, ldap_instance_t *inst,
+ static isc_result_t
+ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock,
+ 		  isc_boolean_t preserve_forwarding);
++static isc_result_t
++delete_forwarding_table(ldap_instance_t *inst, dns_name_t *name,
++			const char *msg_obj_type, const char *dn);
+ 
+ /* Functions for maintaining pool of LDAP connections */
+ static isc_result_t ldap_pool_create(isc_mem_t *mctx, unsigned int connections,
+@@ -386,6 +392,7 @@ new_ldap_instance(isc_mem_t *mctx, const char *db_name,
+ 	ISC_LIST_INIT(ldap_inst->orig_global_forwarders.addrs);
+ 
+ 	CHECK(zr_create(mctx, &ldap_inst->zone_register));
++	CHECK(fwdr_create(ldap_inst->mctx, &ldap_inst->fwd_register));
+ 
+ 	CHECK(isc_mutex_init(&ldap_inst->kinit_lock));
+ 
+@@ -625,6 +632,7 @@ destroy_ldap_instance(ldap_instance_t **ldap_instp)
+ 	}
+ 
+ 	dns_rbtnodechain_invalidate(&chain);
++	fwdr_destroy(&ldap_inst->fwd_register);
+ 
+ 	/* TODO: Terminate psearch watcher sooner? */
+ 	if (ldap_inst->psearch && ldap_inst->watcher != 0) {
+@@ -845,6 +853,7 @@ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock,
+ 		  isc_boolean_t preserve_forwarding)
+ {
+ 	isc_result_t result;
++	isc_result_t isforward = ISC_R_NOTFOUND;
+ 	isc_boolean_t unlock = ISC_FALSE;
+ 	isc_boolean_t freeze = ISC_FALSE;
+ 	dns_zone_t *zone = NULL;
+@@ -862,10 +871,11 @@ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock,
+ 	}
+ 
+ 	if (!preserve_forwarding) {
+-		result = dns_fwdtable_delete(inst->view->fwdtable, name);
+-		if (result != ISC_R_SUCCESS && result != ISC_R_NOTFOUND)
+-			log_error_r("zone '%s': failed to delete forwarders",
+-				    zone_name_char);
++		CHECK(delete_forwarding_table(inst, name, "zone",
++					      zone_name_char));
++		isforward = fwdr_zone_ispresent(inst->fwd_register, name);
++		if (isforward == ISC_R_SUCCESS)
++			CHECK(fwdr_del_zone(inst->fwd_register, name));
+ 	}
+ 
+ 	/* TODO: flush cache records belonging to deleted zone */
+@@ -873,8 +883,11 @@ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock,
+ 
+ 	result = zr_get_zone_ptr(inst->zone_register, name, &zone);
+ 	if (result == ISC_R_NOTFOUND || result == DNS_R_PARTIALMATCH) {
++		if (isforward == ISC_R_SUCCESS)
++			log_debug(1, "forward zone '%s': unloaded", zone_name_char);
+ 		log_debug(1, "zone '%s' not found in zone register", zone_name_char);
+-		CLEANUP_WITH(ISC_R_SUCCESS);
++		result = dns_view_flushcache(inst->view);
++		goto cleanup;
+ 	} else if (result != ISC_R_SUCCESS)
+ 		goto cleanup;
+ 
+@@ -1224,9 +1237,49 @@ cleanup:
+ 	return ISC_R_SUCCESS;   
+ }
+ 
+-/* Parse the zone entry */
++/* Parse the forward zone entry */
++static isc_result_t
++ldap_parse_fwd_zoneentry(ldap_entry_t *entry, ldap_instance_t *inst)
++{
++	const char *dn;
++	dns_name_t name;
++	char name_txt[DNS_NAME_FORMATSIZE];
++	isc_result_t result;
++
++	REQUIRE(entry != NULL);
++	REQUIRE(inst != NULL);
++
++	dns_name_init(&name, NULL);
++
++	/* Derive the DNS name of the zone from the DN. */
++	dn = entry->dn;
++	CHECK(dn_to_dnsname(inst->mctx, dn, &name, NULL));
++
++	result = configure_zone_forwarders(entry, inst, &name);
++	if (result != ISC_R_DISABLED && result != ISC_R_SUCCESS) {
++		log_error_r("forward zone '%s': could not configure forwarding", dn);
++		goto cleanup;
++	}
++
++	result = fwdr_zone_ispresent(inst->fwd_register, &name);
++	if (result == ISC_R_NOTFOUND) {
++		CHECK(fwdr_add_zone(inst->fwd_register, &name));
++		dns_name_format(&name, name_txt, DNS_NAME_FORMATSIZE);
++		log_info("forward zone '%s': loaded", name_txt);
++	}
++	else if (result != ISC_R_SUCCESS)
++		log_error_r("forward zone '%s': could not read forwarding register", dn);
++
++cleanup:
++	if (dns_name_dynamic(&name))
++		dns_name_free(&name, inst->mctx);
++
++	return result;
++}
++
++/* Parse the master zone entry */
+ static isc_result_t
+-ldap_parse_zoneentry(ldap_entry_t *entry, ldap_instance_t *inst)
++ldap_parse_master_zoneentry(ldap_entry_t *entry, ldap_instance_t *inst)
+ {
+ 	const char *dn;
+ 	ldap_valuelist_t values;
+@@ -1262,6 +1315,7 @@ ldap_parse_zoneentry(ldap_entry_t *entry, ldap_instance_t *inst)
+ 	CHECK(discard_from_cache(inst->cache, &name));
+ 
+ 	/*
++	 * TODO: Remove this hack, most probably before Fedora 20.
+ 	 * Forwarding has top priority hence when the forwarders are properly
+ 	 * set up all others attributes are ignored.
+ 	 */
+@@ -1397,9 +1451,14 @@ cleanup:
+ 	if (publish && !published) { /* Failure in ACL parsing or so. */
+ 		log_error_r("zone '%s': publishing failed, rolling back due to",
+ 			    entry->dn);
++		result = delete_forwarding_table(inst, &name, "zone", entry->dn);
++		if (result != ISC_R_SUCCESS)
++			log_error_r("zone '%s': rollback failed: forwarding",
++				    entry->dn);
+ 		result = zr_del_zone(inst->zone_register, &name);
+ 		if (result != ISC_R_SUCCESS)
+-			log_error_r("zone '%s': rollback failed", entry->dn);
++			log_error_r("zone '%s': rollback failed: zone register",
++				    entry->dn);
+ 	}
+ 	if (unlock)
+ 		isc_task_endexclusive(task);
+@@ -1413,10 +1472,10 @@ cleanup:
+ }
+ 
+ /*
+- * Search in LDAP for zones. If 'create' is true, create the zones. Otherwise,
+- * we assume that we are past the configuration phase and no new zones can be
+- * added. In that case, only modify the zone's properties, like the update
+- * policy.
++ * Search in LDAP for master and forward zones.
++ * This function can be called either by persistent search thread or by timer.
++ * It has to compare list of master and forward zones represented by
++ * zone register and forward register with data in LDAP.
+  *
+  * @param delete_only Do LDAP vs. zone register cross-check and delete zones
+  *                    which aren't in LDAP, but do not load new zones.
+@@ -1432,9 +1491,10 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 	ldap_qresult_t *ldap_config_qresult = NULL;
+ 	ldap_qresult_t *ldap_zones_qresult = NULL;
+ 	int zone_count = 0;
++	ldap_entryclass_t zone_class;
+ 	ldap_entry_t *entry;
+-	dns_rbt_t *rbt = NULL;
+-	isc_boolean_t invalidate_nodechain = ISC_FALSE;
++	dns_rbt_t *master_rbt = NULL;  /** < Master zones only */
++	dns_rbt_t *forward_rbt = NULL; /** < Forward zones only */
+ 	char *config_attrs[] = {
+ 		"idnsForwardPolicy", "idnsForwarders", 
+ 		"idnsAllowSyncPTR", "idnsZoneRefresh",
+@@ -1442,8 +1502,8 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 	};
+ 	char *zone_attrs[] = {
+ 		"idnsName", "idnsUpdatePolicy", "idnsAllowQuery",
+-		"idnsAllowTransfer", "idnsForwardPolicy", 
+-		"idnsForwarders", NULL
++		"idnsAllowTransfer", "idnsForwardPolicy", "idnsForwarders",
++		"idnsAllowDynUpdate", "idnsAllowSyncPTR", "objectClass", NULL
+ 	};
+ 
+ 	REQUIRE(ldap_inst != NULL);
+@@ -1461,7 +1521,8 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 	CHECK(ldap_pool_getconnection(ldap_inst->pool, &ldap_conn));
+ 	CHECK(ldap_query(ldap_inst, ldap_conn, &ldap_zones_qresult, str_buf(ldap_inst->base),
+ 			 LDAP_SCOPE_SUBTREE, zone_attrs, 0,
+-			 "(&(objectClass=idnsZone)(idnsZoneActive=TRUE))"));
++			 "(&(idnsZoneActive=TRUE)"
++			 "(|(objectClass=idnsZone)(objectClass=idnsForwardZone)))"));
+ 
+ 	/* Do not touch configuration from psearch watcher thread, otherwise
+ 	 * BIND will crash. The problem is that isc_task_beginexclusive()
+@@ -1482,14 +1543,17 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 	}
+ 
+ 	/*
+-	 * Create RB-tree with all zones stored in LDAP for cross check
+-	 * with registered zones in plugin.
++	 * Create RB-trees with all master and forward zones stored in LDAP
++	 * for cross check with zones registered in plugin.
+ 	 */
+-	CHECK(dns_rbt_create(ldap_inst->mctx, NULL, NULL, &rbt));
+-	
++	CHECK(dns_rbt_create(ldap_inst->mctx, NULL, NULL, &master_rbt));
++	CHECK(dns_rbt_create(ldap_inst->mctx, NULL, NULL, &forward_rbt));
++
+ 	for (entry = HEAD(ldap_zones_qresult->ldap_entries);
+ 	     entry != NULL;
+ 	     entry = NEXT(entry, link)) {
++		if (ldap_entry_getclass(entry, &zone_class) != ISC_R_SUCCESS)
++			continue;
+ 
+ 		/* Derive the dns name of the zone from the DN. */
+ 		dns_name_t name;
+@@ -1498,93 +1562,113 @@ refresh_zones_from_ldap(ldap_instance_t *ldap_inst, isc_boolean_t delete_only)
+ 		if (result == ISC_R_SUCCESS) {
+ 			log_debug(5, "Refresh %s", entry->dn);
+ 			/* Add found zone to RB-tree for later check. */
+-			result = dns_rbt_addname(rbt, &name, NULL);
++			if (zone_class & LDAP_ENTRYCLASS_MASTER)
++				result = dns_rbt_addname(master_rbt, &name, NULL);
++			else if (zone_class & LDAP_ENTRYCLASS_FORWARD)
++				result = dns_rbt_addname(forward_rbt, &name, NULL);
+ 		}
+ 		if (dns_name_dynamic(&name))
+ 			dns_name_free(&name, ldap_inst->mctx);
+-		
++
+ 		if (result != ISC_R_SUCCESS) {
+ 			log_error("Could not parse zone %s", entry->dn);
+ 			continue;
+ 		}
+ 
+-		if (!delete_only)
+-			CHECK(ldap_parse_zoneentry(entry, ldap_inst));
+-		zone_count++;
+-	}
+-
+-	dns_rbtnode_t *node;
+-	dns_rbtnodechain_t chain;
+-	isc_boolean_t delete = ISC_FALSE;	
+-	
+-	DECLARE_BUFFERED_NAME(fname);
+-	DECLARE_BUFFERED_NAME(forig);
+-	DECLARE_BUFFERED_NAME(aname);
+-	
+-	INIT_BUFFERED_NAME(fname);
+-	INIT_BUFFERED_NAME(forig);
+-	INIT_BUFFERED_NAME(aname);
+-	
+-	dns_rbtnodechain_init(&chain, ldap_inst->mctx);
+-	invalidate_nodechain = ISC_TRUE;
+-	result = dns_rbtnodechain_first(&chain, zr_get_rbt(ldap_inst->zone_register), NULL, NULL);
+-	
+-	while (result == DNS_R_NEWORIGIN || result == ISC_R_SUCCESS) {
+-		dns_name_reset(&aname);
+-		delete = ISC_FALSE;	
+-		node = NULL;
+-
+-		result = dns_rbtnodechain_current(&chain, &fname, &forig, &node);
+-		if (result != ISC_R_SUCCESS) {
+-			if (result != ISC_R_NOTFOUND)
+-				log_error_r(
+-					"unable to walk through RB-tree during zone_refresh");
+-			goto next;
++		if (!delete_only) {
++			if (zone_class & LDAP_ENTRYCLASS_MASTER)
++				result = ldap_parse_master_zoneentry(entry, ldap_inst);
++			else if (zone_class & LDAP_ENTRYCLASS_FORWARD)
++				result = ldap_parse_fwd_zoneentry(entry, ldap_inst);
+ 		}
++		if (result == ISC_R_SUCCESS)
++			zone_count++;
++		else
++			log_error_r("error parsing zone '%s'", entry->dn);
++	}
+ 
+-		result = dns_name_concatenate(&fname, &forig, &aname,
+-					      aname.buffer);
+-		if (result != ISC_R_SUCCESS) {
+-			log_error_r("unable to concatenate DNS names "
+-				    "during zone_refresh");
+-			goto next;	
+-		}
++	/* Walk through master zone register and remove all zones which
++	 * disappeared from LDAP. */
++	rbt_iterator_t iter;
++	char name_txt[DNS_NAME_FORMATSIZE];
++	DECLARE_BUFFERED_NAME(registered_name);
++	DECLARE_BUFFERED_NAME(ldap_name);
+ 
+-		/* Do not remove auxiliary (= non-zone) nodes. */
+-		char buf[DNS_NAME_FORMATSIZE];
+-		dns_name_format(&aname, buf, DNS_NAME_FORMATSIZE);
+-		if (!node->data) {
+-			log_debug(11,"auxiliary zone/node '%s' will not be removed", buf);
+-			goto next;
++	INIT_BUFFERED_NAME(registered_name);
++	result = zr_rbt_iter_init(ldap_inst->zone_register, &iter, &registered_name);
++	while (result == ISC_R_SUCCESS) {
++		void *data = NULL;
++		INIT_BUFFERED_NAME(ldap_name);
++
++		result = dns_rbt_findname(master_rbt, &registered_name,
++					  DNS_RBTFIND_EMPTYDATA,
++					  &ldap_name, &data);
++		if (result == ISC_R_NOTFOUND || result == DNS_R_PARTIALMATCH) {
++			rbt_iter_stop(&iter);
++			dns_name_format(&registered_name, name_txt, DNS_NAME_FORMATSIZE);
++			log_debug(1, "master zone '%s' is being removed", name_txt);
++			result = ldap_delete_zone2(ldap_inst, &registered_name,
++						   ISC_FALSE, ISC_FALSE);
++			if (result != ISC_R_SUCCESS) {
++				log_error_r("unable to delete master zone '%s'", name_txt);
++			} else {
++				/* Deletion invalidated the chain, restart iteration. */
++				result = zr_rbt_iter_init(ldap_inst->zone_register,
++							  &iter, &registered_name);
++				continue;
++			}
++		} else if (result != ISC_R_SUCCESS) {
++			break;
+ 		}
++		result = rbt_iter_next(&iter, &registered_name);
++	}
++	if (result != ISC_R_NOTFOUND && result != ISC_R_NOMORE)
++		goto cleanup;
+ 
+-		DECLARE_BUFFERED_NAME(foundname);
+-		INIT_BUFFERED_NAME(foundname);
+-		
++	/* Walk through forward zone register and remove all zones which
++	 * disappeared from LDAP. */
++	INIT_BUFFERED_NAME(registered_name);
++	result = fwdr_rbt_iter_init(ldap_inst->fwd_register, &iter, &registered_name);
++	while (result == ISC_R_SUCCESS) {
+ 		void *data = NULL;
+-		if (dns_rbt_findname(rbt, &aname, DNS_RBTFIND_EMPTYDATA,
+-		                     &foundname, &data) == ISC_R_SUCCESS) {
+-			goto next;		
++		INIT_BUFFERED_NAME(ldap_name);
++
++		result = dns_rbt_findname(forward_rbt, &registered_name,
++					  DNS_RBTFIND_EMPTYDATA,
++					  &ldap_name, &data);
++		if (result == ISC_R_NOTFOUND || result == DNS_R_PARTIALMATCH) {
++			rbt_iter_stop(&iter);
++			dns_name_format(&registered_name, name_txt, DNS_NAME_FORMATSIZE);
++			log_debug(1, "forward zone '%s' is being removed", name_txt);
++			result = delete_forwarding_table(ldap_inst, &registered_name,
++							 "forward zone", name_txt);
++			if (result != ISC_R_SUCCESS) {
++				log_error_r("could not remove forwarding for zone '%s': "
++					    "forward register mismatch", name_txt);
++			}
++			result = fwdr_del_zone(ldap_inst->fwd_register, &registered_name);
++			if (result == ISC_R_SUCCESS) {
++				/* Deletion invalidated the chain, restart iteration. */
++				result = fwdr_rbt_iter_init(ldap_inst->fwd_register,
++							    &iter, &registered_name);
++				continue;
++			} else {
++				log_error_r("unable to delete forward zone '%s' "
++					    "from forwarding register", name_txt);
++			}
++		} else if (result != ISC_R_SUCCESS) {
++			break;
+ 		}
+-		/* Log zone removing. */
+-		log_debug(1, "Zone '%s' has been removed from database.", buf);
+-		
+-		delete = ISC_TRUE;
+-next:	
+-		result = dns_rbtnodechain_next(&chain, NULL, NULL);
+-	
+-		if (delete == ISC_TRUE)
+-			ldap_delete_zone2(ldap_inst, &aname, ISC_FALSE,
+-					  ISC_FALSE);
++		result = rbt_iter_next(&iter, &registered_name);
+ 	}
+-
++	if (result == ISC_R_NOTFOUND || result == ISC_R_NOMORE)
++		goto cleanup;
+ 
+ cleanup:
+-	if (rbt != NULL)
+-		dns_rbt_destroy(&rbt); 
+-
+-	if (invalidate_nodechain)
+-		dns_rbtnodechain_invalidate(&chain);
++	if (master_rbt != NULL)
++		dns_rbt_destroy(&master_rbt);
++	if (forward_rbt != NULL)
++		dns_rbt_destroy(&forward_rbt);
+ 
+ 	ldap_query_free(ISC_FALSE, &ldap_config_qresult);
+ 	ldap_query_free(ISC_FALSE, &ldap_zones_qresult);
+@@ -1701,6 +1785,7 @@ ldap_parse_rrentry(isc_mem_t *mctx, ldap_entry_t *entry,
+ {
+ 	isc_result_t result;
+ 	dns_rdataclass_t rdclass;
++	ldap_entryclass_t objclass;
+ 	dns_ttl_t ttl;
+ 	dns_rdatatype_t rdtype;
+ 	dns_rdata_t *rdata = NULL;
+@@ -1709,10 +1794,10 @@ ldap_parse_rrentry(isc_mem_t *mctx, ldap_entry_t *entry,
+ 	const char *dn = "<NULL entry>";
+ 	const char *data = "<NULL data>";
+ 
+-	result = add_soa_record(mctx, qresult, origin, entry,
+-				rdatalist, fake_mname);
+-	if (result != ISC_R_SUCCESS && result != ISC_R_NOTFOUND)
+-		goto cleanup;
++	CHECK(ldap_entry_getclass(entry, &objclass));
++	if ((objclass & LDAP_ENTRYCLASS_MASTER) != 0)
++		CHECK(add_soa_record(mctx, qresult, origin, entry,
++				     rdatalist, fake_mname));
+ 
+ 	rdclass = ldap_entry_getrdclass(entry);
+ 	ttl = ldap_entry_getttl(entry);
+@@ -3270,7 +3355,7 @@ cleanup:
+ }
+ 
+ /*
+- * update_action routine is processed asynchronously so it cannot assume
++ * update_zone routine is processed asynchronously so it cannot assume
+  * anything about state of ldap_inst from where it was sent. The ldap_inst
+  * could have been already destroyed due server reload. The safest
+  * way how to handle zone update is to refetch ldap_inst,
+@@ -3285,13 +3370,15 @@ update_zone(isc_task_t *task, isc_event_t *event)
+ 	ldap_instance_t *inst = NULL;
+ 	ldap_qresult_t *ldap_qresult_zone = NULL;
+ 	ldap_qresult_t *ldap_qresult_record = NULL;
++	ldap_entryclass_t objclass;
+ 	ldap_entry_t *entry_zone = NULL;
+ 	ldap_entry_t *entry_record = NULL;
+ 	isc_mem_t *mctx;
+ 	dns_name_t prevname;
+ 	char *attrs_zone[] = {
+ 		"idnsName", "idnsUpdatePolicy", "idnsAllowQuery",
+-		"idnsAllowTransfer", "idnsForwardPolicy", "idnsForwarders", NULL
++		"idnsAllowTransfer", "idnsForwardPolicy", "idnsForwarders",
++		"idnsAllowDynUpdate", "idnsAllowSyncPTR", "objectClass", NULL
+ 	};
+ 	char *attrs_record[] = {
+ 			"objectClass", "dn", NULL
+@@ -3306,14 +3393,20 @@ update_zone(isc_task_t *task, isc_event_t *event)
+ 
+ 	result = ldap_query(inst, NULL, &ldap_qresult_zone, pevent->dn,
+ 			 LDAP_SCOPE_BASE, attrs_zone, 0,
+-			 "(&(objectClass=idnsZone)(idnsZoneActive=TRUE))");
++			 "(&(|(objectClass=idnsZone)"
++			 "(objectClass=idnsForwardZone))"
++			 "(idnsZoneActive=TRUE))");
+ 	if (result != ISC_R_SUCCESS && result != ISC_R_NOTFOUND)
+ 		CLEANUP_WITH(result);
+ 
+ 	if (result == ISC_R_SUCCESS &&
+ 	    HEAD(ldap_qresult_zone->ldap_entries) != NULL) {
+ 		entry_zone = HEAD(ldap_qresult_zone->ldap_entries);
+-		CHECK(ldap_parse_zoneentry(entry_zone, inst));
++		CHECK(ldap_entry_getclass(entry_zone, &objclass));
++		if (objclass & LDAP_ENTRYCLASS_MASTER)
++			CHECK(ldap_parse_master_zoneentry(entry_zone, inst));
++		else if (objclass & LDAP_ENTRYCLASS_FORWARD)
++			CHECK(ldap_parse_fwd_zoneentry(entry_zone, inst));
+ 
+ 		if (PSEARCH_MODDN(pevent->chgtype)) {
+ 			if (dn_to_dnsname(inst->mctx, pevent->prevdn, &prevname, NULL)
+@@ -3321,20 +3414,22 @@ update_zone(isc_task_t *task, isc_event_t *event)
+ 				CHECK(ldap_delete_zone(inst, pevent->prevdn,
+ 				      ISC_TRUE, ISC_FALSE));
+ 			} else {
+-				log_debug(5, "update_action: old zone wasn't managed "
+-						"by plugin, dn '%s'", pevent->prevdn);
++				log_debug(5, "update_zone: old zone wasn't managed "
++					     "by plugin, dn '%s'", pevent->prevdn);
+ 			}
+ 
+ 			/* fill the cache with records from renamed zone */
+-			CHECK(ldap_query(inst, NULL, &ldap_qresult_record, pevent->dn,
+-					LDAP_SCOPE_ONELEVEL, attrs_record, 0,
+-					"(objectClass=idnsRecord)"));
++			if (objclass & LDAP_ENTRYCLASS_MASTER) {
++				CHECK(ldap_query(inst, NULL, &ldap_qresult_record, pevent->dn,
++						LDAP_SCOPE_ONELEVEL, attrs_record, 0,
++						"(objectClass=idnsRecord)"));
+ 
+-			for (entry_record = HEAD(ldap_qresult_record->ldap_entries);
+-					entry_record != NULL;
+-					entry_record = NEXT(entry_record, link)) {
++				for (entry_record = HEAD(ldap_qresult_record->ldap_entries);
++						entry_record != NULL;
++						entry_record = NEXT(entry_record, link)) {
+ 
+-				psearch_update(inst, entry_record, NULL);
++					psearch_update(inst, entry_record, NULL);
++				}
+ 			}
+ 		}
+ 
+@@ -3589,12 +3684,7 @@ psearch_update(ldap_instance_t *inst, ldap_entry_t *entry, LDAPControl **ctrls)
+ 	isc_mem_t *mctx = NULL;
+ 	isc_taskaction_t action = NULL;
+ 
+-	class = ldap_entry_getclass(entry);
+-	if (class == LDAP_ENTRYCLASS_NONE) {
+-		log_error("psearch_update: ignoring entry with unknown class, dn '%s'",
+-			  entry->dn);
+-		return; /* ignore it, it's OK */
+-	}
++	CHECK(ldap_entry_getclass(entry, &class));
+ 
+ 	if (ctrls != NULL)
+ 		CHECK(ldap_parse_entrychangectrl(ctrls, &chgtype, &prevdn_ldap));
+@@ -3635,7 +3725,9 @@ psearch_update(ldap_instance_t *inst, ldap_entry_t *entry, LDAPControl **ctrls)
+ 
+ 	if ((class & LDAP_ENTRYCLASS_CONFIG) != 0)
+ 		action = update_config;
+-	else if ((class & LDAP_ENTRYCLASS_ZONE) != 0)
++	else if ((class & LDAP_ENTRYCLASS_MASTER) != 0)
++		action = update_zone;
++	else if ((class & LDAP_ENTRYCLASS_FORWARD) != 0)
+ 		action = update_zone;
+ 	else if ((class & LDAP_ENTRYCLASS_RR) != 0)
+ 		action = update_record;
+@@ -3797,14 +3889,18 @@ restart:
+ 		ret = ldap_search_ext(conn->handle,
+ 				      str_buf(inst->base),
+ 				      LDAP_SCOPE_SUBTREE,
+-					  /*
+-					   * (objectClass==idnsZone AND idnsZoneActive==TRUE) 
+-					   * OR (objectClass == idnsRecord)
+-					   * OR (objectClass == idnsConfigObject)
+-					   */
+-				      "(|(&(objectClass=idnsZone)(idnsZoneActive=TRUE))"
+-					  "(objectClass=idnsRecord)"
+-					  "(objectClass=idnsConfigObject))",
++				      /*    class = record
++				       * OR class = config
++				       * OR class = zone
++				       * OR class = forward
++				       *
++				       * Inactive zones are handled
++				       * in update_zone. */
++				      "(|"
++				      "(objectClass=idnsRecord)"
++				      "(objectClass=idnsConfigObject)"
++				      "(objectClass=idnsZone)"
++				      "(objectClass=idnsForwardZone))",
+ 				      NULL, 0, conn->serverctrls, NULL, NULL,
+ 				      LDAP_NO_LIMIT, &conn->msgid);
+ 		if (ret != LDAP_SUCCESS) {
+-- 
+2.1.0
+
