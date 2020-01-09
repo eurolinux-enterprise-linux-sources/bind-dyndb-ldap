@@ -6,7 +6,7 @@
 
 Name:           bind-dyndb-ldap
 Version:        2.3
-Release:        2%{?dist}
+Release:        2%{?dist}.1
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
@@ -23,6 +23,7 @@ BuildRequires:  autoconf, automake, libtool
 Requires:       bind >= 32:9.6.1-0.3.b1
 
 Patch0: 0001-Don-t-fail-if-idnsSOAserial-attribute-is-missing-in-.patch
+Patch1: 0001-Prevent-crash-caused-by-race-condition-during-plugin.patch
 
 %description
 This package provides an LDAP back-end plug-in for BIND. It features
@@ -34,6 +35,7 @@ off of your LDAP server.
 %setup -q -n %{name}-%{VERSION}
 
 %patch0 -p1 -b .rh895083
+%patch1 -p1 -b .rh923113
 
 %build
 export CPPFLAGS=`isc-config.sh --cflags`
@@ -62,6 +64,9 @@ rm -rf %{buildroot}
 
 
 %changelog
+* Fri Mar 22 2013 Adam Tkac <atkac redhat com> - 2.3-2.1
+- processing of configuration opts too early could lead to crash (#923113)
+
 * Tue Jan 15 2013 Adam Tkac <atkac redhat com> - 2.3-2
 - idnsSOAserial attribute can be missing on LDAP replicas (#895083)
 
