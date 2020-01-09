@@ -1,0 +1,512 @@
+10.0
+====
+[1] Default TTL can be configured at zone level in dNSdefaultTTL attribute.
+    Please note that changes may not be applied until server reload.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/70
+
+[2] Certain subset of configuration options can be specified
+    in idnsServerConfigObject in LDAP. Each bind-dyndb-ldap instance will
+    only use values from object with idnsServerId attribute matching server_id
+    configured in named.conf. This can be used for per-server configuration
+    in shared LDAP tree.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/162
+
+[2] fake_mname option can be specified in idnsServerConfigObject in LDAP.
+    Please note that changes may not be applied until server reload.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/162
+
+[3] Per-server global forwarders can be configured in idnsServerConfigObject.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/162
+
+[4] Dynamic record generation using idnsTemplateObject and
+    idnsSubstitutionVariable;ipalocation attribute from idnsServerConfigObject
+    is supported. Please see README.
+    Please note that changes may not be applied until server reload.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/126
+
+[5] Forwarding configuration is properly ignored for disabled master zones.
+
+[6] Interaction between DNS root zone and global forwarding is now
+    deterministic and root zone has higher priority over global forwarding.
+
+[7] Various problems in internal event processing were fixed.
+
+[8] Potential crash in early start-up phase was fixed.
+
+[9] Compatibility with BIND >= 9.10.4b1 was improved
+
+9.0
+====
+[1] Automatic empty zones conflicting with forward zones with policy 'only'
+    are now automatically unloaded. Warning is issued if the conflicting
+    forward zone has policy 'first' but the zone is not unloaded.
+    Conflict occurs if empty zone and forward zone are super/sub/equal domains.
+!!! This changes semantics of data in LDAP.
+!!! Users have to upgrade their data manually.
+
+8.0
+====
+[1] Unknown record types can be stored in LDAP using generic syntax (RFC 3597).
+    LDAP schema was extended for this purpose with the UnknownRecord attribute.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/157
+
+[2] PTR record synchronization was improved.
+    - New PTR records now inherit the TTL value from the respective A/AAAA
+      records.
+    - SERVFAIL error is no longer returned to clients if A/AAAA record update
+      succeeded but PTR record synchronization failed because of
+      misconfiguration. Such errors are only logged.
+    - PTR record synchronization was reworked to reduce the probability
+      of race condition occurrences.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/155
+
+[3] LDAP rename (MODRDN) for DNS records is now supported.
+    Renaming of whole DNS zones is not supported and will lead to errors.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/123
+
+[4] Data changed in LDAP while connection to server was down are now refreshed
+    properly.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/128
+
+[5] Crash caused by object class and DN format mismatch were fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/148
+
+[6] Compatibility with BIND 9.9.4 was improved.
+
+[7] Documentation and schema were fixed and improved. The doc/schema.ldif file
+    is now properly formatted as LDIF and contains instructions
+    for OpenLDAP and 389 DS.
+
+7.0
+====
+[1] Support for BIND 9.10 was added.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/139
+
+6.1
+====
+[1] Crash caused by interaction between forward and master zones was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/145
+
+[2] DNS NOTIFY messages are sent after any modification to the zone.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/144
+
+[3] Misleading error message about forward zones during reconnect was fixed.
+
+[4] Informational message about number of defined/loaded zones was improved.
+
+[5] Various build system improvements.
+
+6.0
+====
+[1] idnsZoneActive attribute is supported again and zones can be activated
+    and deactivated at run-time.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/127
+
+5.3
+====
+[1] Internal locking was reworked to prevent crashes and deadlocks.
+
+5.2
+====
+[1] Kerberos ticket expiration is now handled correctly.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/131
+
+[2] BIND no longer crashes after removing root zone from LDAP.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/138
+
+[3] Root zone handling was fixed to prevent accidental child zone removal.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/122
+
+[4] Temporary files for idnsZone objects are now inside master/ subdirectory.
+
+[5] Temporary directories are created with ug=rwx,o= permissions to enable
+    POSIX ACL usage.
+
+[6] Naming rules for working directories have changed: See README section 6.
+
+[7] Documentation clearly states that idnsZoneActive attribute is not supported.
+
+5.1
+====
+[1] Fix crash during reconnection to LDAP.
+
+5.0
+====
+[1] Support for DNSSEC in-line signing was added. Now any LDAP zone can be
+    signed with keys provided by user.
+
+[2] DNSKEY, RRSIG, NSEC and NSEC3 records are automatically managed
+    by BIND+bind-dyndb-ldap. Respective attributes in LDAP are ignored.
+
+[3] Forwarder semantic was changed to match BIND's semantic:
+    - idnsZone object always represent master zone
+    - idnsForwardZone object (new) always represent forward zone
+
+[4] Master root zone can be stored in LDAP.
+
+4.4
+====
+[1] Error handling for zone loading was fixed.
+
+4.3
+====
+[1] LDAP update processing was fixed to prevent BIND from crashing during
+    shutdown.
+
+4.2
+====
+[1] Record parsing was fixed to prevent child-zone data corruption in cases
+    where parent zone example.com was hosted on the same server as child zone
+    sub.example.com. (This bug was introduced in version 4.0.)
+
+4.1
+====
+[1] Fix few minor bugs in error handling found by static code analyzers.
+
+4.0
+====
+[1] Persistent search and zone refresh were replaced by RFC 4533 (SyncRepl).
+    Options zone_refresh, cache_ttl and psearch were removed.
+    Also LDAP attributes idnsZoneRefresh and idnsPersistentSearch were removed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/120
+
+[2] Internal database was re-factored and replaced by RBT DB from BIND 9.
+    As a result, read-query performance is nearly same as with plain BIND.
+    Wildcard records are supported and queries for non-existing records
+    do not impose additional load on LDAP server.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/95
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/6
+
+[3] Plug-in creates journal file for each DNS zone in LDAP. This allows us
+    to support IXFR. Working directory has to be writable by named,
+    please see README - configuration option "directory".
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/64
+
+[4] SOA serial auto-increment feature is now mandatory. The plugin has to have
+    write access to LDAP.
+    (Proper SOA serial maintenance is required for journaling.)
+
+[5] Data are not served to clients until initial synchronization with LDAP
+    is finished. All queries are answered with NXDOMAIN during synchronization.
+
+[6] Crash caused by invalid SOA record was fixed.
+
+[7] Empty instance names (specified by "dynamic-db" directive) were disallowed.
+
+[8] Typo in LDAP schema was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/121
+
+Known problems and limitations
+[1] LDAP MODRDN (rename) is not supported at the moment.
+
+[2] Zones enabled at run-time are not loaded properly.
+    You have to restart BIND after changing idnsZoneActive attribute to TRUE.
+
+[3] Zones and records deleted when connection to LDAP is down are not
+    refreshed properly after re-connection.
+    You have to restart BIND to restore consistency.
+
+3.6
+=====
+[1] Crash triggered by invalid SOA record was fixed.
+
+[2] Minor logging improvements and code clean-up.
+
+3.5
+=====
+[1] Crash triggered by zone_refresh with broken connection to LDAP was fixed.
+
+[2] Code was changed to not trigger false positives in Clang static analyzer.
+
+[3] Persistent search is enabled by default.
+
+[4] Options cache_ttl, psearch and zone_refresh were formally deprecated.
+
+3.4
+=====
+[1] Crash during BIND shutdown caused by race condition in update processing
+    was fixed.
+
+3.3
+=====
+[1] Crash triggered by missing sasl_user parameter was fixed.
+
+[2] IPv6 handling in PTR record synchronization was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/118
+
+[3] Authentication settings are validated more strictly.
+    Conflicting options are reported and prevent named from starting.
+
+[4] Automatic empty zones defined in RFC 6303 are automatically unloaded
+    if conflicting master or forward zone is defined in LDAP.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/119
+
+[5] Configuration without persistent search is now deprecated
+    and informational message is logged. Support for zone_refresh
+    will be removed in 4.x release.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/120
+
+3.2
+=====
+[1] An error in dynamic update/transfer/query policy is interpreted as
+    most restrictive policy, i.e. nobody is allowed to update/transfer/query
+    the zone.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/116
+
+[2] Attempts to update zones with idnsAllowDynUpdate == FALSE are logged.
+
+[3] TTL values > 2^31-1 are interpreted as 0.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/117
+
+[4] All RR types supported by BIND are automatically supported by plugin.
+    From now it is enough to add new attribute type to LDAP schema,
+    no recompilation is required.
+
+[5] PTR record synchronization deletes only PTR records, but no other records
+    (e.g. TXT) under names in the reverse zone.
+
+[6] Various improvements related to logging (dynamic updates, PTR record
+    synchronization, LDAP error handling).
+
+3.1
+=====
+[1] Crash caused by zone deletion introduced by 
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/99
+    was fixed.
+
+3.0
+=====
+[1] DNAME records are supported. DNAME attribute was changed to single-valued.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/63
+
+[2] Master and forward zones now have separate object classes:
+    idnsZone and idnsForwardZone. idnsForward* attributes in idnsZone object
+    class will have old semantics for some time.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/99
+
+[3] Settings system was heavily refactored. From now, unknown options in
+    configuration file cause error. DNS dynamic updates should create
+    slightly lower load on LDAP server because of settings 'cache'.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/53
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/81
+
+[4] Deadlock triggered by PTR record synchronization was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/113
+
+2.6
+=====
+[1] Invalid zones are automatically reloaded after each change in zone data.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/102
+
+[2] Plugin periodically reconnects when KDC is unavailable.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/100
+
+[3] Invalid wildcard name in update-policy no longer crashes BIND.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/108
+
+[4] Crash caused by idnsAllowSyncPTR attribute in global configuration object
+    in LDAP was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/110
+
+[5] Crash caused by invalid query/transfer policy was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/109
+
+[6] Crash caused by 'zonesub' match-type in update ACL was fixed.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/111
+
+[7] Support for update-policy match type 'external' was added.
+
+[8] Various improvements related to logging.
+
+2.5
+=====
+[1] Fix crash during per-zone cache flush.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/107
+
+2.4
+=====
+[1] Missing SOA serial number in zone object is treated as 1.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/103
+
+[2] Each zone has separate record cache. It should prevent problems
+    during record rename.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/91
+
+[3] False warning 'zone serial (2012060301) unchanged' should not pop-up.
+    https://fedorahosted.org/bind-dyndb-ldap/ticket/79
+
+[4] New option 'verbose_checks yes' enables more verbose logging.
+
+[5] Various error handling and logging improvements.
+    All bugs reported by Clang static analyzer were fixed.
+
+[6] Dead code cleanup.
+
+2.3
+======
+[1] Global forwarders from named.conf were ignored.
+
+[2] Master zone is now unloaded if idnsForwaders attribute is set at run-time.
+
+[3] Internal record cache is flushed after any change in forwarders.
+
+2.2
+======
+[1] Compatibility with BIND 9.8 was restored.
+
+2.1
+======
+[1] Forward policy "none" was introduced.
+
+[2] Internal record cache is flushed properly on new forward zone load.
+
+[3] Forwarding will be disabled after deleting associated forward zone.
+
+2.0
+======
+[1] SOA serial number can be incremented automatically after each change
+    in LDAP database. (Configuration option "serial_autoincrement".)
+
+[2] It was possible to DoS named service via quiery which contained
+    $ character. CVE-2012-3429 was fixed.
+
+[3] DNS Dynamic Update returns codes NOTAUTH and REFUSED properly.
+
+[4] BIND doesn't refuse to start if initial connection times out.
+
+[5] Object renaming (LDAP moddn) in persistent mode is handled properly.
+
+[6] Internal record cache is flushed properly after reconnection
+    to the LDAP server (in configurations with persistent search).
+
+[7] Simple time-based deadlock detection code was added. Error message
+    is printed after 10*(timeout) seconds.
+    Some deadlocks in various situations with low connection count were fixed.
+
+[8] Libdns interface version >= 90 is supported properly.
+
+[9] Zone transfers were fixed. Records with non-FQDNs are handled properly.
+
+[10] Logging was improved.
+
+[11] Memory leaks in dynamic update, persistent search, ldap_query
+     and configurations with multiple plugin instances were fixed.
+
+[12] Version numbering format changed to: [features].[bugfixes]
+
+[13] Many other bugfixes
+
+1.1.0rc1
+======
+
+[1] It was possible to DoS named service via query which contained non-alphabet
+character. (CVE-2012-2134)
+
+[2] The plugin wrote ambiguous "zone has been removed" messages to the log.
+
+[3] The plugin failed to return A/AAAA delegation glue records.
+
+[4] Fixes for memory leaks in code which handles Kerberos authentication.
+
+1.1.0b2
+======
+
+[1] The plugin could incorrectly updated SOA record fields.
+
+[2] The plugin could crashed on shutdown/reload when no zones in LDAP are
+present.
+
+[3] When using psearch, plugin could hung on shutdown/reload when connection to
+LDAP was lost.
+
+1.1.0b1
+======
+
+[1] Add support for IPv6 elements in idnsForwarders attribute
+and make syntax compatible with BIND9 forwarders.
+
+[2] Fix bug which caused named to crash during reload when failed to make a
+connection to LDAP.
+
+[3] Plugin is now able to fetch certain configuration options from LDAP. Check
+README for more information.
+
+[4] Many other bugfixes.
+
+1.1.0a2
+======
+
+[1] Fix some errors reported by Coverity tool.
+
+[2] Persistent search didn't propagate added/modified RRs to cache.
+
+[3] DNS delegation now works fine.
+
+[4] Relative domain names in resource records weren't expanded correctly
+when psearch was used.
+
+[5] The plugin could crash when LDAP contained DNS name with no data.
+
+[6] Reworked idnsAllowQuery and idnsAllowTransfer support. We now 100% follow
+BIND9 syntax.
+
+[7] Fixed various bugs in code which synchronizes A/AAAA and it's PTR records.
+
+1.1.0a1
+======
+
+[1] The plugin now skips only invalid record instead of the whole DN
+when DN contains multiple records and one is invalid.
+
+[2] New option "sync_ptr". When set to "yes" the plugin automatically
+updates corresponding PTR records when A/AAAA update is received.
+Zone must not have "idnsAllowDynUpdate" set to "no".
+
+[3] New zone attribute idnsAllowSyncPTR which allows to enable PTR
+synchronization per-zone.
+
+[4] New idnsForwarders and idnsForwardPolicy attributes. You can set per-domain
+forwarding with those options. See BIND 9 Administrator reference manual,
+description of "forwarders", forward zones and "forward" options for details.
+
+[5] Added support for zone transfers. Only AXFR is supported now.
+
+[6] The plugin now periodically reconnects to LDAP when the first connection
+attempt fails.
+
+[7] New object class idnsConfigObject can be used to store plugin configuration
+in LDAP. Only idnsForwarders option is currently supported. In future it's
+planned to allow to store every bind-dyndb-ldap option valid in named.conf to be
+stored in LDAP.
+
+[8] Persistent search feature was extended to resource records.
+
+[9] Many bugfixes, see git log for details.
+
+1.0.0rc1
+=======
+
+[1] When connection to the LDAP was lost, the plugin didn't call the ldap_bind
+during reconnection.
+
+[2] Added new option "ldap_hostname" which allows to set LDAP server hostname
+when it is different from actual /bin/hostname. This option sets the
+LDAP_OPT_HOST_NAME option.
+
+1.0.0b1
+======
+
+[1] Added new boolean option called "psearch". When this option is set to "yes"
+then plugin will use advantage of psearch
+(http://tools.ietf.org/id/draft-ietf-ldapext-psearch-03.txt) to immediately
+fetch new/modified/deleted zones from LDAP database. Note that the LDAP server
+has to support the psearch as well.
+
+[2] The plugin failed to set update ACLs for zones correctly.
+
+[3] The FreeIPA CLI could have created update-policy attributes which contained
+FQDNs ending with double-dot. Added a workaround to parse such crippled FQDNs.
+
+[4] Race condition in semaphore_wait() could have caused server to hang.
+
+[5] Major changes in the plugin code to make it more maintainable and readable.

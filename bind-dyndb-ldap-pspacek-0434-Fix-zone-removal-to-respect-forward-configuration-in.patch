@@ -1,0 +1,60 @@
+From c28f568bb546bb87adb1d250a479ff966de81a40 Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Fri, 12 Aug 2016 12:18:33 +0200
+Subject: [PATCH] Fix zone removal to respect forward configuration
+ inheritance.
+
+Ad-hoc fwd_delete_table() calls did not respect inheritance hierarchy
+in forwarding configuration. Now all manipulation with forward table
+is done in fwd_configure_zone() and fully respects configuration inheritance.
+
+There is a trick: When removing or deactivating a zone, fwd_configure_zone()
+is called with empty configuration set to simulate that the zone does
+not have any explicit configuration. This triggers the inheritance
+logic when necessary (i.e. for the root zone).
+
+https://fedorahosted.org/bind-dyndb-ldap/ticket/167
+---
+ src/ldap_helper.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/ldap_helper.c b/src/ldap_helper.c
+index 696a755fb8001993ff1a16fa034a9286cbb5ad89..ad6e41764740d18e9015b01d83e2634e0bcb9213 100644
+--- a/src/ldap_helper.c
++++ b/src/ldap_helper.c
+@@ -1301,19 +1301,18 @@ ldap_delete_zone2(ldap_instance_t *inst, dns_name_t *name, isc_boolean_t lock)
+ 	if (lock)
+ 		run_exclusive_enter(inst, &lock_state);
+ 
+-	CHECK(fwd_delete_table(inst->view, name, "zone",
+-			       zone_name_char));
++	/* simulate no explicit forwarding configuration */
++	CHECK(fwd_configure_zone(&inst->empty_fwdz_settings, inst, name));
+ 	isforward = fwdr_zone_ispresent(inst->fwd_register, name);
+ 	if (isforward == ISC_R_SUCCESS)
+ 		CHECK(fwdr_del_zone(inst->fwd_register, name));
+ 
+ 	result = zr_get_zone_ptr(inst->zone_register, name, &raw, &secure);
+ 	if (result == ISC_R_NOTFOUND || result == DNS_R_PARTIALMATCH) {
+ 		if (isforward == ISC_R_SUCCESS)
+ 			log_info("forward zone '%s': shutting down", zone_name_char);
+ 		log_debug(1, "zone '%s' not found in zone register", zone_name_char);
+-		result = dns_view_flushcache(inst->view);
+-		goto cleanup;
++		CLEANUP_WITH(ISC_R_SUCCESS);
+ 	} else if (result != ISC_R_SUCCESS)
+ 		goto cleanup;
+ 
+@@ -1373,7 +1372,8 @@ unpublish_zone(ldap_instance_t *inst, dns_name_t *name, const char *logname) {
+ 	}
+ 	CHECK(dns_view_findzone(inst->view, name, &zone_in_view));
+ 	INSIST(zone_in_view == raw || zone_in_view == secure);
+-	CHECK(fwd_delete_table(inst->view, name, "zone", logname));
++	/* simulate no explicit forwarding configuration */
++	CHECK(fwd_configure_zone(&inst->empty_fwdz_settings, inst, name));
+ 	CHECK(dns_zt_unmount(inst->view->zonetable, zone_in_view));
+ 
+ cleanup:
+-- 
+2.7.4
+
