@@ -1,0 +1,38 @@
+From 9879850c5e5c19958949697db2da60ca7a3be7de Mon Sep 17 00:00:00 2001
+From: Tomas Krizek <tkrizek@redhat.com>
+Date: Tue, 14 Mar 2017 14:59:26 +0100
+Subject: [PATCH] Skip isc_lib_register
+
+---
+ src/ldap_driver.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/src/ldap_driver.c b/src/ldap_driver.c
+index 4e842cb0f122c49080128a81892f9737d29a299e..9fc3b9a44fba9aec6a71a9ff66b2b96c3c4777cf 100644
+--- a/src/ldap_driver.c
++++ b/src/ldap_driver.c
+@@ -1143,14 +1143,17 @@ dyndb_init(isc_mem_t *mctx, const char *name, const char *parameters,
+ 	 * access to named's global namespace, in which case we need
+ 	 * to initialize libisc/libdns
+ 	 */
+-	if (dctx->refvar != &isc_bind9) {
+-		isc_lib_register();
++	if (dctx->refvar != &isc_lctx) {
++		void *old_lctx = &isc_lctx;
+ 		isc_log_setcontext(dctx->lctx);
+ 		dns_log_setcontext(dctx->lctx);
+-		log_debug(5, "registering library from dynamic ldap driver, %p != %p.", dctx->refvar, &isc_bind9);
++		log_debug(5, "registering library from dynamic ldap driver, "
++			     "%p != %p.", dctx->refvar, old_lctx);
+ 	}
+ 
+-	isc_hash_set_initializer(dctx->hashinit);
++	if (isc_hashctx != NULL && isc_hashctx != dctx->hctx)
++		isc_hash_ctxdetach(&isc_hashctx);
++	isc_hashctx = dctx->hctx;
+ 
+ 	log_debug(2, "registering dynamic ldap driver for %s.", name);
+ 
+-- 
+2.9.3
+

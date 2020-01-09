@@ -1,0 +1,39 @@
+From 41461fc444170ffd9b5459e2f0b2480f3288cc1d Mon Sep 17 00:00:00 2001
+From: Tomas Krizek <tkrizek@redhat.com>
+Date: Fri, 7 Apr 2017 14:48:32 +0200
+Subject: [PATCH 1/2] settings: skip unconfigured values
+
+When a value is not configured in settings map, it is skipped.
+If it is the last processed value, the result of ISC_R_NOTFOUND
+would cause the cleanup section of the function fail. Since
+unconfigured values are allowed and expected, override the result
+to ISC_R_SUCCESS in this case to prevent triggerring an error.
+
+https://pagure.io/bind-dyndb-ldap/issue/172
+
+Reviewed-By: Martin Basti <mbasti@redhat.com>
+---
+ src/settings.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/settings.c b/src/settings.c
+index 37e6e5ccd751bd176f8dbdd4fd505b7e18ded4f4..8beb0d3cd16479c79bdc104a6a6fd28033f403e7 100644
+--- a/src/settings.c
++++ b/src/settings.c
+@@ -597,8 +597,11 @@ settings_set_fill(const cfg_obj_t *config, settings_set_t *set)
+ 	     setting++) {
+ 		cfg_value = NULL;
+ 		result = cfg_map_get(config, setting->name, &cfg_value);
+-		if (result == ISC_R_NOTFOUND)
+-			continue; /* setting not configured in map */
++		if (result == ISC_R_NOTFOUND) {
++			/* setting not configured in map */
++			result = ISC_R_SUCCESS;
++			continue;
++		}
+ 		else if (result != ISC_R_SUCCESS)
+ 			goto cleanup;
+ 		if (cfg_obj_isstring(cfg_value)) {
+-- 
+2.9.3
+

@@ -1,30 +1,36 @@
 %define VERSION %{version}
 
 Name:           bind-dyndb-ldap
-Version:        10.0
-Release:        5%{?dist}
+Version:        11.1
+Release:        3%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
 License:        GPLv2+
-URL:            https://fedorahosted.org/bind-dyndb-ldap
-Source0:        https://fedorahosted.org/released/%{name}/%{name}-%{VERSION}.tar.bz2
-Source1:        https://fedorahosted.org/released/%{name}/%{name}-%{VERSION}.tar.bz2.asc
-Patch0:         bind-dyndb-ldap-pspacek-0432-2-Prevent-crash-while-reloading-previously-invalid-but.patch
-Patch1:         bind-dyndb-ldap-pspacek-0433-Remove-preserve_forwarding-parameter-from-ldap_delet.patch
-Patch2:         bind-dyndb-ldap-pspacek-0434-Fix-zone-removal-to-respect-forward-configuration-in.patch
+URL:            https://releases.pagure.org/bind-dyndb-ldap
+Source0:        https://releases.pagure.org/%{name}/%{name}-%{VERSION}.tar.bz2
+Source1:        https://releases.pagure.org/%{name}/%{name}-%{VERSION}.tar.bz2.asc
+Patch0:         bind-dyndb-ldap-tkrizek-0001-Revert-BIND-9.11-use-new-public-header-isc-errno.h-i.patch
+Patch1:         bind-dyndb-ldap-tkrizek-0002-Revert-BIND-9.11-Add-wrapper-for-new-DB-API-method-n.patch
+Patch2:         bind-dyndb-ldap-tkrizek-0003-Revert-BIND-9.11-Remove-if-blocks-for-older-BIND-ver.patch
+Patch3:         bind-dyndb-ldap-tkrizek-0004-Skip-isc-lib-register.patch
+Patch4:         bind-dyndb-ldap-pemensik-0002-Treat-passwords-like-ordinary-text-bind-does-not-sup.patch
+Patch5:         bind-dyndb-ldap-pemensik-0003-Replace-unsupported-autoreallocating-buffer-by-custo.patch
+Patch6:         bind-dyndb-ldap-tkrizek-0005-Setting-skip-unconfigured-values.patch
+Patch7:         bind-dyndb-ldap-tkrizek-0006-Coverity-fix-REVERSE_INULL-for-pevent-inst.patch
 
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-BuildRequires:  bind-devel >= 32:9.9.0-1, bind-lite-devel >= 32:9.9.0-1
+BuildRequires:  bind-devel >= 32:9.9.4-44, bind-lite-devel >= 32:9.9.4-44
 BuildRequires:  krb5-devel
 BuildRequires:  openldap-devel
 BuildRequires:  libuuid-devel
 BuildRequires:  automake, autoconf, libtool
 
-Requires:       bind >= 32:9.9.0-1
+Requires:       bind >= 32:9.9.4-44
 # https://bugzilla.redhat.com/show_bug.cgi?id=1376851
 Requires(post,postun): selinux-policy
+Requires(post):  sed
 
 %description
 This package provides an LDAP back-end plug-in for BIND. It features
@@ -37,6 +43,11 @@ off of your LDAP server.
 %patch0 -p1
 %patch1 -p1
 %patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
 
 %build
 autoreconf -fiv
@@ -54,15 +65,55 @@ rm %{buildroot}%{_libdir}/bind/ldap.la
 rm -r %{buildroot}%{_datadir}/doc/%{name}
 
 
+%post
 # SELinux boolean named_write_master_zones has to be enabled
 # otherwise the plugin will not be able to write to /var/named.
 # This scriptlet enables the boolean after installation or upgrade.
 # SELinux is sensitive area so I want to inform user about the change.
-%post
 if [ -x "/usr/sbin/setsebool" ] ; then
         echo "Enabling SELinux boolean named_write_master_zones"
         /usr/sbin/setsebool -P named_write_master_zones=1 || :
 fi
+
+
+# Transform named.conf if it still has old-style API.
+PLATFORM=$(uname -m) 
+
+if [ $PLATFORM == "x86_64" ] ; then
+    LIBPATH=/usr/lib64
+else
+    LIBPATH=/usr/lib
+fi
+
+# The following sed script:
+#   - scopes the named.conf changes to dynamic-db
+#   - replaces arg "name value" syntax with name "value"
+#   - changes dynamic-db header to dyndb
+#   - uses the new way the define path to the library
+#   - removes no longer supported arguments (library, cache_ttl,
+#       psearch, serial_autoincrement, zone_refresh)
+while read -r PATTERN
+do
+    SEDSCRIPT+="$PATTERN"
+done <<EOF
+/^\s*dynamic-db/,/};/ {
+
+  s/\(\s*\)arg\s\+\(["']\)\([a-zA-Z_]\+\s\)/\1\3\2/g;
+
+  s/^dynamic-db/dyndb/;
+
+  s@\(dyndb "[^"]\+"\)@\1 "$LIBPATH/bind/ldap.so"@;
+  s@\(dyndb '[^']\+'\)@\1 '$LIBPATH/bind/ldap.so'@;
+
+  /\s*library[^;]\+;/d;
+  /\s*cache_ttl[^;]\+;/d;
+  /\s*psearch[^;]\+;/d;
+  /\s*serial_autoincrement[^;]\+;/d;
+  /\s*zone_refresh[^;]\+;/d;
+}
+EOF
+
+sed -i.bak -e "$SEDSCRIPT" /etc/named.conf
 
 
 # This scriptlet disables the boolean after uninstallation.
@@ -79,12 +130,25 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
-%doc NEWS README COPYING doc/{example,schema}.ldif
+%doc NEWS README.md COPYING doc/{example,schema}.ldif
 %dir %attr(770, root, named) %{_localstatedir}/named/dyndb-ldap
 %{_libdir}/bind/ldap.so
 
 
 %changelog
+* Wed Apr 26 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-3
+- resolves: #1436268 crash when server_id is not present in named.conf
+- coverity fixes
+
+* Wed Mar 15 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-2
+- bump NVR to fix bind dependencies
+
+* Wed Mar 15 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-1
+- update to letest upstream version
+- resolves: #1393889 Rebase to bind-dyndb-ldap 11+
+- resolves: #1165796 bind-dyndb-ldap crashes if server is shutting down and connection to LDAP is down
+- resolves: #1413805 bind-dyndb-ldap default schema is shipped with syntax error
+
 * Wed Sep 21 2016 Petr Spacek <pspacek@redhat.com> - 10.0-5
 - resolves: #1376851 Unable to set named_write_master_zones boolean on upgrade
 

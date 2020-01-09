@@ -1,0 +1,198 @@
+From 61d59a061acf2eeeb328864d1aef8b10b6b6a1fb Mon Sep 17 00:00:00 2001
+From: rpm-build <rpm-build>
+Date: Mon, 20 Feb 2017 15:06:45 +0100
+Subject: [PATCH 3/3] Replace unsupported autoreallocating buffer by custom
+ print_buffer
+
+---
+ src/settings.c | 106 +++++++++++++++++++++++++++++++++++++++++----------------
+ 1 file changed, 77 insertions(+), 29 deletions(-)
+
+diff --git a/src/settings.c b/src/settings.c
+index 8f3ae34..7d41b66 100644
+--- a/src/settings.c
++++ b/src/settings.c
+@@ -553,19 +553,69 @@ settings_set_free(settings_set_t **set) {
+ 	*set = NULL;
+ }
+ 
++static const unsigned int BUFFER_INCR = 2048;
++/** Structure for unlimited buffer.
++ *
++ * Replace for isc_buffer with autoreallocation enabled from newer bind. */
++typedef struct print_buffer
++{
++	isc_mem_t *mctx;
++	isc_buffer_t *buffer;
++	isc_result_t allocated;
++} print_buffer_t;
++
++/** Initialize print buffer with preallocated isc_buffer. */
++static isc_result_t
++print_buffer_init(isc_mem_t *mctx, print_buffer_t *buffer)
++{
++	buffer->mctx = mctx;
++	buffer->buffer = NULL;
++	buffer->allocated =
++		isc_buffer_allocate(mctx, &buffer->buffer, BUFFER_INCR);
++	return buffer->allocated;
++}
++
++static isc_result_t
++print_buffer_increment(print_buffer_t *pb, unsigned int inclen)
++{
++	unsigned int increment = BUFFER_INCR;
++	isc_buffer_t *newbuffer = NULL;
++	unsigned int newsize;
++	if (increment < (inclen))
++		increment = (((inclen)/BUFFER_INCR)+1)*BUFFER_INCR;
++
++	newsize = isc_buffer_length(pb->buffer)+increment;
++	REQUIRE(newsize > isc_buffer_length(pb->buffer));
++	pb->allocated = isc_buffer_allocate(pb->mctx, &newbuffer, newsize);
++	if (pb->allocated == ISC_R_SUCCESS)
++	{
++		isc_buffer_putmem(newbuffer,
++			isc_buffer_base(pb->buffer),
++			isc_buffer_length(pb->buffer));
++		isc_buffer_free(&pb->buffer);
++		pb->buffer = newbuffer;
++	}
++	return pb->allocated;
++}
++
+ /**
+- * Append textlen bytes from text to isc_buffer pointed to by closure.
++ * Append textlen bytes from text to print_buffer pointed to by closure.
+  *
+- * @pre closure is an initialized isc_buffer with autoreallocation enabled.
++ * @pre closure is an initialized print_buffer .
+  */
+ static void
+ cfg_printer(void *closure, const char *text, int textlen) {
+-	isc_buffer_t *logbuffer = closure;
+-
+-	REQUIRE(logbuffer != NULL);
+-	REQUIRE(logbuffer->autore == ISC_TRUE);
++	struct print_buffer * pb = closure;
++	REQUIRE(pb != NULL);
++	REQUIRE(pb->buffer != NULL);
++	REQUIRE(pb->mctx != NULL);
++
++	/* I will append terminating '\0', make sure space is reserved */
++	if (isc_buffer_availablelength(pb->buffer) < (unsigned)(textlen+1)) {
++		print_buffer_increment(pb, textlen+1);
++	}
+ 
+-	isc_buffer_putmem(logbuffer, (const unsigned char *)text, textlen);
++	isc_buffer_putmem(pb->buffer, (const unsigned char *)text, textlen);
+ }
+ 
+ /**
+@@ -583,14 +633,12 @@ settings_set_fill(const cfg_obj_t *config, settings_set_t *set)
+ {
+ 	isc_result_t result;
+ 	setting_t *setting;
+-	isc_buffer_t *buf_value = NULL;
++	print_buffer_t buf_value;
+ 	const cfg_obj_t *cfg_value;
+ 	const char *str_value;
+ 
+ 	REQUIRE(cfg_obj_ismap(config) == ISC_TRUE);
+-
+-	CHECK(isc_buffer_allocate(set->mctx, &buf_value, ISC_BUFFER_INCR));
+-	isc_buffer_setautorealloc(buf_value, ISC_TRUE);
++	CHECK(print_buffer_init(set->mctx, &buf_value));
+ 
+ 	for (setting = set->first_setting;
+ 	     setting->name != NULL;
+@@ -605,21 +653,22 @@ settings_set_fill(const cfg_obj_t *config, settings_set_t *set)
+ 			/* this avoids additional quotes around the string */
+ 			str_value = cfg_obj_asstring(cfg_value);
+ 		} else {
+-			cfg_print(cfg_value, cfg_printer, buf_value);
+-			isc_buffer_putmem(buf_value, (unsigned char *)"\0", 1);
+-			str_value = isc_buffer_base(buf_value);
++			cfg_print(cfg_value, cfg_printer, &buf_value);
++			CHECK(buf_value.allocated);
++			isc_buffer_putmem(buf_value.buffer, (unsigned char *)"\0", 1);
++			str_value = isc_buffer_base(buf_value.buffer);
+ 		}
+ 		result = set_value(set->mctx, set, setting, str_value);
+ 		if (result != ISC_R_SUCCESS && result != ISC_R_IGNORE)
+ 			goto cleanup;
+-		isc_buffer_clear(buf_value);
++		isc_buffer_clear(buf_value.buffer);
+ 	}
+ 
+ cleanup:
+ 	if (result != ISC_R_SUCCESS)
+ 		log_error_r("cannot parse settings for '%s'", set->name);
+-	if (buf_value != NULL)
+-		isc_buffer_free(&buf_value);
++	if (buf_value.buffer != NULL)
++		isc_buffer_free(&buf_value.buffer);
+ 	return result;
+ }
+ 
+@@ -673,46 +722,45 @@ setting_set_parse_conf(isc_mem_t *mctx, const char *name,
+ 	isc_result_t result;
+ 	cfg_obj_t *config = NULL;
+ 	isc_buffer_t in_buf;
+-	isc_buffer_t *log_buf = NULL;
++	print_buffer_t pb;
+ 	cfg_parser_t *parser = NULL;
+ 	unsigned int len;
+ 
+ 	REQUIRE(parameters != NULL);
+ 
+-	CHECK(isc_buffer_allocate(mctx, &log_buf, ISC_BUFFER_INCR));
+-	isc_buffer_setautorealloc(log_buf, ISC_TRUE);
++	CHECK(print_buffer_init(mctx, &pb));
+ 
+ 	len = strlen(parameters);
+ 	isc_buffer_constinit(&in_buf, parameters, len);
+ 	isc_buffer_add(&in_buf, len);
+ 
+ 	CHECK(cfg_parser_create(mctx, dns_lctx, &parser));
+-	result = cfg_parse_buffer2(parser, &in_buf, name, cfg_type_conf,
++	result = cfg_parse_buffer(parser, &in_buf, cfg_type_conf,
+ 				   &config);
+ 	if (result == ISC_R_SUCCESS) {
+-		cfg_print(config, cfg_printer, log_buf);
++		cfg_print(config, cfg_printer, &pb);
+ 		cfg_obj_log(config, dns_lctx, ISC_LOG_DEBUG(10),
+ 			    "configuration for dyndb instance '%s' "
+ 			    "(starting in file %s on line %lu):\n"
+ 			    "%.*s",
+-			    name, file, line, isc_buffer_usedlength(log_buf),
+-			    (char *)isc_buffer_base(log_buf));
++			    name, file, line, isc_buffer_usedlength(pb.buffer),
++			    (char *)isc_buffer_base(pb.buffer));
+ 	} else {
+ 		log_error("configuration for dyndb instance '%s' "
+ 			  "(starting in file %s on line %lu) is invalid",
+ 			  name, file, line);
+-		cfg_print_grammar(cfg_type_conf, cfg_printer, log_buf);
++		cfg_print_grammar(cfg_type_conf, cfg_printer, &pb);
+ 		log_info("expected grammar:\n"
+-			 "%.*s", isc_buffer_usedlength(log_buf),
+-			 (char *)isc_buffer_base(log_buf));
++			 "%.*s", isc_buffer_usedlength(pb.buffer),
++			 (char *)isc_buffer_base(pb.buffer));
+ 		goto cleanup;
+ 	}
+ 
+ 	CHECK(settings_set_fill(config, settings));
+ 
+ cleanup:
+-	if (log_buf != NULL)
+-		isc_buffer_free(&log_buf);
++	if (pb.buffer != NULL)
++		isc_buffer_free(&pb.buffer);
+ 	if (config != NULL)
+ 		cfg_obj_destroy(parser, &config);
+ 	if (parser != NULL)
+-- 
+2.9.3
+

@@ -140,8 +140,7 @@ am_ldap_la_OBJECTS = $(am__objects_1) ldap_la-acl.lo \
 	ldap_la-log.lo ldap_la-metadb.lo ldap_la-mldap.lo \
 	ldap_la-rbt_helper.lo ldap_la-semaphore.lo ldap_la-settings.lo \
 	ldap_la-syncptr.lo ldap_la-syncrepl.lo ldap_la-str.lo \
-	ldap_la-zone.lo ldap_la-zone_manager.lo \
-	ldap_la-zone_register.lo
+	ldap_la-zone.lo ldap_la-zone_register.lo
 ldap_la_OBJECTS = $(am_ldap_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -335,7 +334,6 @@ bindplugindir = $(libdir)/bind
 HDRS = \
 	acl.h			\
 	bindcfg.h		\
-	compat.h		\
 	empty_zones.h		\
 	fs.h			\
 	fwd.h			\
@@ -358,7 +356,6 @@ HDRS = \
 	types.h			\
 	util.h			\
 	zone.h			\
-	zone_manager.h		\
 	zone_register.h
 
 ldap_la_SOURCES = \
@@ -385,7 +382,6 @@ ldap_la_SOURCES = \
 	syncrepl.c		\
 	str.c			\
 	zone.c			\
-	zone_manager.c		\
 	zone_register.c
 
 ldap_la_CFLAGS = -Wall -Wextra @WERROR@ -std=gnu99 -O2
@@ -490,7 +486,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ldap_la-syncptr.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ldap_la-syncrepl.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ldap_la-zone.Plo@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ldap_la-zone_manager.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ldap_la-zone_register.Plo@am__quote@
 
 .c.o:
@@ -667,13 +662,6 @@ ldap_la-zone.lo: zone.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='zone.c' object='ldap_la-zone.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(ldap_la_CFLAGS) $(CFLAGS) -c -o ldap_la-zone.lo `test -f 'zone.c' || echo '$(srcdir)/'`zone.c
-
-ldap_la-zone_manager.lo: zone_manager.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(ldap_la_CFLAGS) $(CFLAGS) -MT ldap_la-zone_manager.lo -MD -MP -MF $(DEPDIR)/ldap_la-zone_manager.Tpo -c -o ldap_la-zone_manager.lo `test -f 'zone_manager.c' || echo '$(srcdir)/'`zone_manager.c
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/ldap_la-zone_manager.Tpo $(DEPDIR)/ldap_la-zone_manager.Plo
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='zone_manager.c' object='ldap_la-zone_manager.lo' libtool=yes @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(ldap_la_CFLAGS) $(CFLAGS) -c -o ldap_la-zone_manager.lo `test -f 'zone_manager.c' || echo '$(srcdir)/'`zone_manager.c
 
 ldap_la-zone_register.lo: zone_register.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(ldap_la_CFLAGS) $(CFLAGS) -MT ldap_la-zone_register.lo -MD -MP -MF $(DEPDIR)/ldap_la-zone_register.Tpo -c -o ldap_la-zone_register.lo `test -f 'zone_register.c' || echo '$(srcdir)/'`zone_register.c

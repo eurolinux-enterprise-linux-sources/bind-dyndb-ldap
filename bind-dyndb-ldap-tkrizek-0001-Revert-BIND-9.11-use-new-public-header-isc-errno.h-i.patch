@@ -1,0 +1,75 @@
+From 34efc7e7d27d62f1ce67a4b12f41e3ba6ac5045f Mon Sep 17 00:00:00 2001
+From: Tomas Krizek <tkrizek@redhat.com>
+Date: Fri, 17 Feb 2017 14:30:13 +0100
+Subject: [PATCH 1/3] Revert "BIND 9.11: use new public header isc/errno.h
+ instead of private isc/errno2result.h"
+
+This reverts commit 08da3390cfc0985abdc0f791115f0f595e915df6.
+---
+ configure.ac | 12 ++++++------
+ src/fs.c     |  6 +++---
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index 50e41f3af667724accf9996c4167355c074ce00b..9e0f180699057e3d9f6a414868d123bf254fea50 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -105,18 +105,18 @@ int main(void) {
+ [AC_MSG_ERROR([Cross compiling is not supported.])]
+ )
+ 
+-dnl isc_errno_toresult() was not available in older header files
+-AC_MSG_CHECKING([isc_errno_toresult availability])
++dnl isc__errno2result() is typically not present in standard header files
++AC_MSG_CHECKING([isc__errno2result availability in header files])
+ AC_TRY_RUN([
+-#include <isc/errno.h>
++#include <isc/errno2result.h>
+ int main(void) {
+-	isc_errno_toresult(0);
++	isc__errno2result(0);
+ 	return 0;
+ }],
+ [AC_MSG_RESULT([yes])],
+ [AC_MSG_ERROR([
+- Can't find isc_errno_toresult() or header isc/errno.h:
+- Please install bind-devel package or similar.])],
++ Can't find isc__errno2result() or header isc/errno2result.h:
++ Please install bind-lite-devel package or similar.])],
+ [AC_MSG_ERROR([Cross compiling is not supported.])]
+ )
+ 
+diff --git a/src/fs.c b/src/fs.c
+index 61c46b51f225488422fe680f568851e6dfcae8de..09b71d70ea4f15bc5122df1960933f47f0d44eda 100644
+--- a/src/fs.c
++++ b/src/fs.c
+@@ -10,7 +10,7 @@
+ 
+ #include <isc/dir.h>
+ #include <isc/file.h>
+-#include <isc/errno.h>
++#include <isc/errno2result.h>
+ #include <isc/result.h>
+ #include <isc/string.h>
+ #include <isc/util.h>
+@@ -37,7 +37,7 @@ fs_dir_create(const char *dir_name)
+ 	if (ret == 0)
+ 		result = ISC_R_SUCCESS;
+ 	else
+-		result = isc_errno_toresult(errno);
++		result = isc__errno2result(errno);
+ 
+ 	if (result != ISC_R_SUCCESS && result != ISC_R_FILEEXISTS) {
+ 		log_error_r("unable to create directory '%s', working directory "
+@@ -50,7 +50,7 @@ fs_dir_create(const char *dir_name)
+ 		 * solely for this purpose. */
+ 		ret = chmod(dir_name, dir_mode);
+ 		if (ret != 0) {
+-			result = isc_errno_toresult(errno);
++			result = isc__errno2result(errno);
+ 			log_error_r("unable to chmod directory '%s', "
+ 				    "working directory is '%s'",
+ 				    dir_name, dir_curr);
+-- 
+2.9.3
+
