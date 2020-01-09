@@ -1,8 +1,10 @@
 %define VERSION %{version}
 
+%define bind_version 32:9.11.1-1.P1
+
 Name:           bind-dyndb-ldap
 Version:        11.1
-Release:        4%{?dist}
+Release:        6%{?dist}
 Summary:        LDAP back-end plug-in for BIND
 
 Group:          System Environment/Libraries
@@ -10,26 +12,25 @@ License:        GPLv2+
 URL:            https://releases.pagure.org/bind-dyndb-ldap
 Source0:        https://releases.pagure.org/%{name}/%{name}-%{VERSION}.tar.bz2
 Source1:        https://releases.pagure.org/%{name}/%{name}-%{VERSION}.tar.bz2.asc
-Patch0:         bind-dyndb-ldap-tkrizek-0001-Revert-BIND-9.11-use-new-public-header-isc-errno.h-i.patch
-Patch1:         bind-dyndb-ldap-tkrizek-0002-Revert-BIND-9.11-Add-wrapper-for-new-DB-API-method-n.patch
-Patch2:         bind-dyndb-ldap-tkrizek-0003-Revert-BIND-9.11-Remove-if-blocks-for-older-BIND-ver.patch
-Patch3:         bind-dyndb-ldap-tkrizek-0004-Skip-isc-lib-register.patch
 Patch4:         bind-dyndb-ldap-pemensik-0002-Treat-passwords-like-ordinary-text-bind-does-not-sup.patch
 Patch5:         bind-dyndb-ldap-pemensik-0003-Replace-unsupported-autoreallocating-buffer-by-custo.patch
 Patch6:         bind-dyndb-ldap-tkrizek-0005-Setting-skip-unconfigured-values.patch
 Patch7:         bind-dyndb-ldap-tkrizek-0006-Coverity-fix-REVERSE_INULL-for-pevent-inst.patch
+Patch8:         bind-dyndb-ldap-pemensik-0007-Add-empty-callback-for-getsize.patch
+Patch9:         bind-dyndb-ldap-pemensik-0008-Support-for-BIND-9.11.3.patch
+Patch10:        bind-dyndb-ldap-pemensik-0009-Support-for-BIND-9.11.5.patch
+Patch11:        bind-dyndb-ldap-pemensik-0010-Use-correct-dn-value.patch
 
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-BuildRequires:  bind-devel >= 32:9.9.4-51, bind-lite-devel >= 32:9.9.4-51
+BuildRequires:  bind-devel >= %{bind_version}, bind-lite-devel >= %{bind_version}, bind-pkcs11-devel >= %{bind_version}
 BuildRequires:  krb5-devel
 BuildRequires:  openldap-devel
+BuildRequires:  openssl-devel
 BuildRequires:  libuuid-devel
 BuildRequires:  automake, autoconf, libtool
 
-Requires:       bind >= 32:9.9.4-51
-# https://bugzilla.redhat.com/show_bug.cgi?id=1376851
-Requires(post,postun): selinux-policy
+Requires:       bind-pkcs11 >= %{bind_version}, bind-pkcs11-utils >= %{bind_version}
 Requires(post):  sed
 
 %description
@@ -39,15 +40,7 @@ off of your LDAP server.
 
 
 %prep
-%setup -q -n %{name}-%{VERSION}
-%patch0 -p1
-%patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
+%autosetup -p1
 
 %build
 autoreconf -fiv
@@ -66,16 +59,6 @@ rm -r %{buildroot}%{_datadir}/doc/%{name}
 
 
 %post
-# SELinux boolean named_write_master_zones has to be enabled
-# otherwise the plugin will not be able to write to /var/named.
-# This scriptlet enables the boolean after installation or upgrade.
-# SELinux is sensitive area so I want to inform user about the change.
-if [ -x "/usr/sbin/setsebool" ] ; then
-        echo "Enabling SELinux boolean named_write_master_zones"
-        /usr/sbin/setsebool -P named_write_master_zones=1 || :
-fi
-
-
 # Transform named.conf if it still has old-style API.
 PLATFORM=$(uname -m) 
 
@@ -115,15 +98,6 @@ EOF
 
 sed -i.bak -e "$SEDSCRIPT" /etc/named.conf
 
-
-# This scriptlet disables the boolean after uninstallation.
-%postun
-if [ "0$1" -eq "0" ] && [ -x "/usr/sbin/setsebool" ] ; then
-        echo "Disabling SELinux boolean named_write_master_zones"
-        /usr/sbin/setsebool -P named_write_master_zones=0 || :
-fi
-
-
 %clean
 rm -rf %{buildroot}
 
@@ -136,8 +110,16 @@ rm -rf %{buildroot}
 
 
 %changelog
+* Tue Feb 12 2019 Petr Menšík <pemensik@redhat.com> - 11.1-6
+- Bump BIND version and fix library dependecies
+- Rebuild for bind 9.11.3. Minor tweaks to compile.
+- Support for bind 9.11.5 headers
+
+* Mon May 28 2018 Petr Menšík <pemensik@redhat.com> - 11.1-5
+- Resolves: #1580389 depend on bind with writeable home
+
 * Wed Jul 12 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-4
-- Resolves: #1469984 required bind version doesn't have the dyndb interface
+- Resolves: #1469563 required bind version doesn't have the dyndb interface
 
 * Wed Apr 26 2017 Tomas Krizek <tkrizek@redhat.com> - 11.1-3
 - resolves: #1436268 crash when server_id is not present in named.conf
