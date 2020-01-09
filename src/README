@@ -1,0 +1,311 @@
+1. Introduction
+===============
+
+The dynamic LDAP back-end is a plug-in for BIND that provides an LDAP
+database back-end capabilities. For now, it requires that BIND is patched
+to support dynamic loading of database back-ends. You can get a patch
+for your version here:
+
+  http://github.com/mnagy/bind-dynamic_db/downloads
+
+Hopefully, the patch will once be included in the official BIND release.
+
+Because of bug in dns_db_unregister() in older BIND versions, BIND >= 9.7.0a1
+is required.
+
+2. Features
+===========
+* support for dynamic updates
+* SASL authentication
+* persistent search for zones (experimental)
+
+
+3. Installation
+===============
+
+To install the LDAP back-end, extract the tarball and go to the unpacked
+directory. Then follow these steps:
+
+$ ./configure --libdir=<libdir>
+$ make
+
+Where <libdir> is a directory where your libdns is installed. This is
+typically going to be /usr/lib or /usr/lib64 on 64 bit systems.
+
+If configure script complains that it "Can't obtain libdns version",
+please verify you have installed bind development files (package bind9-dev
+or bind-devel) and you exported correct CPPFLAGS via
+"export CPPFLAGS=`isc-config.sh --cflags`" command.
+
+Then, to install, run this as root:
+# make install
+
+This will install the file ldap.so into the <libdir>/bind/ directory.
+
+
+4. LDAP schema
+==============
+
+You can find the complete LDAP schema in the documentation directory. An
+example zone ldif is available in the doc directory.
+
+4.1 Zone (idnsZone) attributes
+------------------------------
+
+* idnsAllowDynUpdate
+	Allow dynamic update of records in this zone. If attribute doesn't exist,
+	value "dyn_update" from plugin configuration will be used.
+
+* idnsAllowQuery
+	Specifies BIND9 zone ACL element. This attribute can be set multiple
+	times and are merged together to the one ACL.
+
+	Example:
+		idnsAllowQuery: 127.0.0.1
+		idnsAllowQuery: ::1
+		idnsAllowQuery: 192.168.1.0/24
+
+	In the example above clients with 127.0.0.1 and ::1 IP addresses and
+	clients from the 192.168.1.0/24 network are allowed to obtain records
+	from the zone.
+
+	You can specify IPv4/IPv6 address, IPv4/IPv6 network address in CIDR
+	format and "any" or "none" keywords. The "!" prefix (for example
+	!192.168.1.0/24) means negation of the ACL element.
+
+	If not set then zone inherits global allow-query from named.conf.
+
+* idnsAllowTransfer
+	Uses same format as idnsAllowQuery. Allows zone transfers for matching
+	clients.
+
+	If not set then zone inherits global allow-transfer from named.conf.
+
+* idnsAllowSyncPTR
+	Allow synchronization of A/AAAA records in zone with PTR records in reverse
+	zone. Reverse zone must have Dynamic update allowed. 
+	(See idnsAllowDynUpdate attribute and dyn_update configuration parameter.)
+
+* idnsForwardPolicy (default "first")
+	Specifies BIND9 zone forward policy. Proprietary value "none"
+	is equivalent to "forwarders {};" in BIND configuration,
+	i.e. effectively disables forwarding and ignores idnsForwarders
+	attribute.
+
+	Value "none" disables forwarding for given zone and ignores
+	global forwarders. Zone with forward policy "none" is considered
+	as type "master", not "forward".
+	Values "first" and "only" are relevant in conjunction with a valid
+	idnsForwarders attribute. Their meaning is same as in BIND9.
+
+* idnsForwarders
+	Defines multiple IP addresses to which queries will be forwarded and
+	effectively creates "forward" zones.
+	It is multi-value attribute: Each IP address (and optional port) has to
+	be in own value. BIND9 syntax for "forwarders" is required.
+	Optional port can be specified by adding " port <number>" after IP 
+	address. IPv4 and IPv6 addresses are supported.
+	Examples: "1.2.3.4" or "1.2.3.4 port 553" or "A::B" or "A::B port 553"
+
+	Zones with idnsForwarders attribute specified and forward policy other
+	than "none" are considered as "forward" zones. All records in LDAP
+	belonging to those zones are ignored and all queries are forwarded.
+
+
+5. Configuration
+================
+
+To configure dynamic loading of back-end, you must put a "dynamic-db"
+clause into your named.conf. The clause must then be followed by a
+string denoting the name. The name is not that much important, it is
+passed to the plug-in and might be used for example, for logging
+purposes. Following after that is a set of options enclosed between
+curly brackets.
+
+The most important option here is "library". It names a shared object
+file that will be opened and loaded. The "arg" option specifies a string
+that is passed directly to the plugin. You can specify multiple "arg"
+options. The LDAP back-end follows the convention that the first word of
+this string is the name of the setting and the rest is the value.
+
+
+5.1 Configuration options
+-------------------------
+List of configuration options follows:
+
+uri
+	The Uniform Resource Identifier pointing to the LDAP server we
+	wish to connect to. This string is directly passed to the
+	ldap_initialize(3) function. This option is mandatory.
+	Example: ldap://ldap.example.com
+
+connections (default 2)
+	Number of connections the LDAP driver should try to establish to
+	the LDAP server. It's best if this matches the number of threads
+	BIND creates, for performance reasons. However, your LDAP server
+	configuration might only allow certain number of connections per
+	client.
+
+base
+	This is the search base that will be used by the LDAP back-end
+	to search for DNS zones. It is mandatory.
+
+auth_method (default "none")
+	The method used to authenticate to the LDAP server. Currently
+	supported methods are "none", "simple" and "sasl". The none
+	method is effectively a simple authentication without password.
+
+bind_dn (default "")
+	Distinguished Name used to bind to the LDAP server. If this is
+	empty and the auth_method is set to "simple", the LDAP back-end
+	will fall-back and use the "none" authentication method.
+
+password (default "")
+	Password for simple and SASL authentication. If the authentication
+	method is set to "simple" and the password is empty, the LDAP
+	driver will fall-back to the "none" authentication method.
+
+sasl_mech (default "GSSAPI")
+	Name of the SASL mechanism to be used for negotiation.
+
+sasl_auth_name
+	The user name to be used for SASL authentication.
+
+sasl_user
+	The user name to be used for SASL proxy authorization.
+
+sasl_password
+	The password to use for the SASL authentication.
+
+sasl_realm
+	The SASL realm name.
+
+krb5_keytab
+	Path to the kerberos keytab containing service credentials to be used
+	for SASL authentication. Append the "FILE:" prefix to the file path.
+	(FILE:/etc/named.keytab, for example)
+
+krb5_principal
+	Kerberos principal of the service, used for SASL authentication.
+	If not set then it is copied from "sasl_user" option. Principal
+	is loaded from file specified in "krb5_keytab" option.
+
+cache_ttl (default 120)
+	This is the number of seconds to keep DNS records that we get
+	from the LDAP server in an internal cache. To disable the
+	caching completely, set this to 0. If your LDAP server is under
+	a heavy load and/or you don't update your records very often, you
+	probably want to set this option on a higher value.
+
+zone_refresh (default 0)
+	Interval (in seconds) of how often the LDAP driver should query the
+	LDAP server for changes in zone settings. If this option is set to 0,
+	the LDAP driver will never refresh the settings.
+	Currently, global settings in idnsConfigObject and zone specific
+	settings in idnsZone attributes are refreshed.
+	Value is ignored if persistent search (psearch) is enabled. 
+
+timeout (default 10)
+	Timeout (in seconds) of the queries to the LDAP server. If the LDAP
+	server don't respond before this timeout then lookup is aborted and
+	BIND returns SERVFAIL. Value "0" means infinite timeout (no timeout).
+
+fake_mname (default "")
+	Ignore value of the idnsSOAmName (primary master DNS name) attribute
+	and use this value instead. This allows multiple BIND processes to share
+	one LDAP database and every BIND reports itself as a primary master in
+	SOA record, for example.
+
+psearch (default no)
+	Set this option to "yes" if you would like to use persistent search
+	query for zone records and global settings. When server supports
+	persistent search your zones and configuration will be automatically 
+	update when they change in LDAP.
+	Enabling psearch disables zone_refresh.
+
+reconnect_interval (default 60)
+	Time (in seconds) after that the plugin should try to connect to LDAP 
+	server again in case connection is lost and immediate reconnection 
+	fails.
+
+ldap_hostname (default "")
+	Sets hostname of the LDAP server. When it is set to "", actual
+	/bin/hostname is used. Please prefer "uri" option, this option should be
+	used only in special cases, for example when GSSAPI authentication
+	is used and named service has Kerberos principal different from
+	/bin/hostname output.
+
+serial_autoincrement (default no)
+	Automatically increment SOA serial number after each change in LDAP.
+	External changes done by other LDAP clients are detected with
+	persistent search.
+
+	If serial number is lower than current UNIX timestamp, then
+	it is set to the timestamp value. If SOA serial is greater or equal
+	to current timestamp, then the serial is incremented by one.
+
+	In multi-master LDAP environments it is recommended to make
+	idnsSOAserial attribute non-replicated (locally significant).
+	It is recommended to not use multiple masters for single slave zone
+	if SOA serial is locally significant. Serial numbers between masters
+	aren't synchronized. It will cause problems with zone transfers from
+	multiple masters.
+
+	This function requires persistent search and 4 connections at least.
+
+sync_ptr (default no)
+	Set this option to "yes" if you would like to keep PTR record 
+	synchronized with coresponding A/AAAA record for all zones.
+	If this option is set to "no", the LDAP driver will check
+	the idnsAllowSyncPTR attribute which specifies the synchronization
+	policy for PTR records in a zone. When an A/AAAA record is deleted 
+	the PTR record must point to the same hostname. 
+	
+dyn_update (default no)
+	Set this option to "yes" if you would like to allow dynamic zone updates.
+	This setting can be overridden for each zone individually
+	by idnsAllowDynUpdate attribute.
+
+5.2 Sample configuration
+------------------------
+Let's take a look at a sample configuration:
+
+dynamic-db "my_db_name" {
+	library "ldap.so";
+	arg "uri ldap://ldap.example.com";
+	arg "base cn=dns, dc=example, dc=com";
+	arg "auth_method none";
+	arg "cache_ttl 300";
+};
+
+With this configuration, the LDAP back-end will try to connect to server
+ldap.example.com with simple authentication, without any password. It
+will then do an LDAP subtree search in the "cn=dns,dc=example,dc=com"
+base for entries with object class idnsZone, for which the
+idnsZoneActive attribute is set to True. For each entry it will find, it
+will register a new zone with BIND. The LDAP back-end will keep each
+record it gets from LDAP in its cache for 5 minutes.
+
+5.3 Configuration in LDAP
+-------------------------
+Some options can be configured in LDAP as idnsConfigObject attributes.
+Value configured in LDAP has priority over value in configuration file.
+(This behavior will change in future versions!)
+Configuration is updated at same time as zone refresh.
+
+Following options are supported (option = attribute equivalent):
+
+forwarders = idnsForwarders (BIND native option)
+forward = idnsForwardPolicy (BIND native option)
+sync_ptr = idnsAllowSyncPTR
+zone_refresh = idnsZoneRefresh
+
+Forward policy option cannot be set without setting forwarders at the same time.
+Zone refresh interval is ignored on target server if psearch is enabled.
+
+
+6. License
+==========
+
+This package is licensed under the GNU General Public License, version 2
+only. See file COPYING for more information.

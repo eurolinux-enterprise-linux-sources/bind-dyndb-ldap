@@ -1,0 +1,60 @@
+From 5fcfb292ca07d0aa3a0d1a87baf2f6b35336dba2 Mon Sep 17 00:00:00 2001
+From: Petr Spacek <pspacek@redhat.com>
+Date: Fri, 11 Jan 2013 17:30:03 +0100
+Subject: [PATCH] Don't fail if idnsSOAserial attribute is missing in LDAP.
+
+DNS zones created on remote IPA 3.0 server don't have
+idnsSOAserial attribute present in LDAP.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=894131
+
+Signed-off-by: Petr Spacek <pspacek@redhat.com>
+---
+ src/ldap_entry.c | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/src/ldap_entry.c b/src/ldap_entry.c
+index 7d8b29b..509995c 100644
+--- a/src/ldap_entry.c
++++ b/src/ldap_entry.c
+@@ -356,8 +356,9 @@ ldap_entry_getfakesoa(ldap_entry_t *entry, const ld_string_t *fake_mname,
+ 	ldap_valuelist_t values;
+ 	int i = 0;
+ 
++	const char *soa_serial_attr = "idnsSOAserial";
+ 	const char *soa_attrs[] = {
+-		"idnsSOAmName", "idnsSOArName", "idnsSOAserial",
++		"idnsSOAmName", "idnsSOArName", soa_serial_attr,
+ 		"idnsSOArefresh", "idnsSOAretry", "idnsSOAexpire",
+ 		"idnsSOAminimum", NULL
+ 	};
+@@ -372,12 +373,25 @@ ldap_entry_getfakesoa(ldap_entry_t *entry, const ld_string_t *fake_mname,
+ 		CHECK(str_cat_char(target, " "));
+ 	}
+ 	for (; soa_attrs[i] != NULL; i++) {
+-		CHECK(ldap_entry_getvalues(entry, soa_attrs[i], &values));
++		result = ldap_entry_getvalues(entry, soa_attrs[i], &values);
++		/** Workaround for
++		 *  https://bugzilla.redhat.com/show_bug.cgi?id=894131
++		 *  DNS zones created on remote IPA 3.0 server don't have
++		 *  idnsSOAserial attribute present in LDAP. */
++		if (result == ISC_R_NOTFOUND
++		    && soa_attrs[i] == soa_serial_attr) {
++			/* idnsSOAserial is missing! Read it as 1. */
++			CHECK(str_cat_char(target, "1 "));
++			continue;
++		} else if (result != ISC_R_SUCCESS)
++			goto cleanup;
++
+ 		CHECK(str_cat_char(target, HEAD(values)->value));
+ 		CHECK(str_cat_char(target, " "));
+ 	}
+ 
+ cleanup:
++	/* TODO: check for memory leaks */
+ 	return result;
+ }
+ 
+-- 
+1.8.1
+

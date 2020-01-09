@@ -1,0 +1,160 @@
+2.2
+======
+[1] Compatibility with BIND 9.8 was restored.
+
+2.1
+======
+[1] Forward policy "none" was introduced.
+
+[2] Internal record cache is flushed properly on new forward zone load.
+
+[3] Forwarding will be disabled after deleting associated forward zone.
+
+2.0
+======
+[1] SOA serial number can be incremented automatically after each change
+    in LDAP database. (Configuration option "serial_autoincrement".)
+
+[2] It was possible to DoS named service via quiery which contained
+    $ character. CVE-2012-3429 was fixed.
+
+[3] DNS Dynamic Update returns codes NOTAUTH and REFUSED properly.
+
+[4] BIND doesn't refuse to start if initial connection times out.
+
+[5] Object renaming (LDAP moddn) in persistent mode is handled properly.
+
+[6] Internal record cache is flushed properly after reconnection
+    to the LDAP server (in configurations with persistent search).
+
+[7] Simple time-based deadlock detection code was added. Error message
+    is printed after 10*(timeout) seconds.
+    Some deadlocks in various situations with low connection count were fixed.
+
+[8] Libdns interface version >= 90 is supported properly.
+
+[9] Zone transfers were fixed. Records with non-FQDNs are handled properly.
+
+[10] Logging was improved.
+
+[11] Memory leaks in dynamic update, persistent search, ldap_query
+     and configurations with multiple plugin instances were fixed.
+
+[12] Version numbering format changed to: [features].[bugfixes]
+
+[13] Many other bugfixes
+
+1.1.0rc1
+======
+
+[1] It was possible to DoS named service via query which contained non-alphabet
+character. (CVE-2012-2134)
+
+[2] The plugin wrote ambiguous "zone has been removed" messages to the log.
+
+[3] The plugin failed to return A/AAAA delegation glue records.
+
+[4] Fixes for memory leaks in code which handles Kerberos authentication.
+
+1.1.0b2
+======
+
+[1] The plugin could incorrectly updated SOA record fields.
+
+[2] The plugin could crashed on shutdown/reload when no zones in LDAP are
+present.
+
+[3] When using psearch, plugin could hung on shutdown/reload when connection to
+LDAP was lost.
+
+1.1.0b1
+======
+
+[1] Add support for IPv6 elements in idnsForwarders attribute
+and make syntax compatible with BIND9 forwarders.
+
+[2] Fix bug which caused named to crash during reload when failed to make a
+connection to LDAP.
+
+[3] Plugin is now able to fetch certain configuration options from LDAP. Check
+README for more information.
+
+[4] Many other bugfixes.
+
+1.1.0a2
+======
+
+[1] Fix some errors reported by Coverity tool.
+
+[2] Persistent search didn't propagate added/modified RRs to cache.
+
+[3] DNS delegation now works fine.
+
+[4] Relative domain names in resource records weren't expanded correctly
+when psearch was used.
+
+[5] The plugin could crash when LDAP contained DNS name with no data.
+
+[6] Reworked idnsAllowQuery and idnsAllowTransfer support. We now 100% follow
+BIND9 syntax.
+
+[7] Fixed various bugs in code which synchronizes A/AAAA and it's PTR records.
+
+1.1.0a1
+======
+
+[1] The plugin now skips only invalid record instead of the whole DN
+when DN contains multiple records and one is invalid.
+
+[2] New option "sync_ptr". When set to "yes" the plugin automatically
+updates corresponding PTR records when A/AAAA update is received.
+Zone must not have "idnsAllowDynUpdate" set to "no".
+
+[3] New zone attribute idnsAllowSyncPTR which allows to enable PTR
+synchronization per-zone.
+
+[4] New idnsForwarders and idnsForwardPolicy attributes. You can set per-domain
+forwarding with those options. See BIND 9 Administrator reference manual,
+description of "forwarders", forward zones and "forward" options for details.
+
+[5] Added support for zone transfers. Only AXFR is supported now.
+
+[6] The plugin now periodically reconnects to LDAP when the first connection
+attempt fails.
+
+[7] New object class idnsConfigObject can be used to store plugin configuration
+in LDAP. Only idnsForwarders option is currently supported. In future it's
+planned to allow to store every bind-dyndb-ldap option valid in named.conf to be
+stored in LDAP.
+
+[8] Persistent search feature was extended to resource records.
+
+[9] Many bugfixes, see git log for details.
+
+1.0.0rc1
+=======
+
+[1] When connection to the LDAP was lost, the plugin didn't call the ldap_bind
+during reconnection.
+
+[2] Added new option "ldap_hostname" which allows to set LDAP server hostname
+when it is different from actual /bin/hostname. This option sets the
+LDAP_OPT_HOST_NAME option.
+
+1.0.0b1
+======
+
+[1] Added new boolean option called "psearch". When this option is set to "yes"
+then plugin will use advantage of psearch
+(http://tools.ietf.org/id/draft-ietf-ldapext-psearch-03.txt) to immediately
+fetch new/modified/deleted zones from LDAP database. Note that the LDAP server
+has to support the psearch as well.
+
+[2] The plugin failed to set update ACLs for zones correctly.
+
+[3] The FreeIPA CLI could have created update-policy attributes which contained
+FQDNs ending with double-dot. Added a workaround to parse such crippled FQDNs.
+
+[4] Race condition in semaphore_wait() could have caused server to hang.
+
+[5] Major changes in the plugin code to make it more maintainable and readable.
